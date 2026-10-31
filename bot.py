@@ -80,7 +80,7 @@ MIN_LEVEL = 25
 DB_PATH = Path(os.getenv("DB_PATH", "data/erebus_ff.sqlite3"))
 BACKUP_DIR = Path(os.getenv("BACKUP_DIR", "backups"))
 SAVE_DIR = Path(os.getenv("SAVE_DIR", "saved_media"))
-BACKUP_EVERY_HOURS = int(os.getenv("BACKUP_EVERY_HOURS", "6"))
+BACKUP_EVERY_HOURS = int(os.getenv("BACKUP_EVERY_HOURS", "1"))
 DEV_HANDLE = "@Noxmirage"
 USE_CUSTOM_EMOJI = os.getenv("USE_CUSTOM_EMOJI", "1") == "1"
 
