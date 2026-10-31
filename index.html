@@ -1,283 +1,653 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#080d18">
-  <meta name="description" content="Erebus Free Fire Tournament. Register through Telegram and compete for prizes.">
-  <title>Erebus Free Fire Tournament</title>
-  <style>
-    :root {
-      --bg: #080d18;
-      --panel: rgba(19, 29, 47, .62);
-      --panel-strong: rgba(24, 38, 59, .78);
-      --text: #f3f8ff;
-      --muted: #9aacc1;
-      --sky: #75d5ff;
-      --sky2: #399fda;
-      --violet: #a9a1ff;
-      --border: rgba(194, 225, 255, .17);
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-behavior: smooth; }
-    body {
-      min-height: 100vh;
-      padding: 34px 16px;
-      display: grid;
-      place-items: center;
-      overflow-x: hidden;
-      color: var(--text);
-      font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
-      background:
-        radial-gradient(ellipse at 12% 8%, rgba(57,159,218,.22), transparent 34%),
-        radial-gradient(ellipse at 90% 88%, rgba(121,112,230,.19), transparent 36%),
-        linear-gradient(145deg, #070b14 0%, #101b2d 52%, #080d18 100%);
-    }
-    body::before, body::after {
-      content: "";
-      position: fixed;
-      width: 360px;
-      height: 360px;
-      border-radius: 50%;
-      filter: blur(100px);
-      opacity: .25;
-      pointer-events: none;
-      z-index: 0;
-    }
-    body::before { background: #38bdf8; top: -210px; left: -150px; }
-    body::after { background: #8275ed; right: -190px; bottom: -210px; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#080810">
+<title>EREBUS | Free Fire Showdown</title>
 
-    .page {
-      position: relative;
-      z-index: 1;
-      width: min(100%, 910px);
-      padding: clamp(24px, 5vw, 56px);
-      overflow: hidden;
-      border: 1px solid rgba(210,235,255,.2);
-      border-radius: 36px;
-      background: linear-gradient(145deg, rgba(27,42,65,.76), rgba(10,17,31,.78));
-      box-shadow: 0 30px 100px rgba(0,0,0,.48), inset 0 1px 0 rgba(255,255,255,.11);
-      backdrop-filter: blur(24px) saturate(145%);
-      -webkit-backdrop-filter: blur(24px) saturate(145%);
-    }
-    .page::before {
-      content: "";
-      position: absolute;
-      top: 0; left: 10%; right: 10%;
-      height: 3px;
-      border-radius: 0 0 20px 20px;
-      background: linear-gradient(90deg, transparent, var(--sky), var(--violet), transparent);
-      box-shadow: 0 0 25px rgba(117,213,255,.7);
-    }
-    .topline {
-      display: flex; align-items: center; justify-content: center; gap: 10px;
-      color: var(--sky);
-      font-size: .74rem; font-weight: 850; letter-spacing: .22em; text-transform: uppercase;
-    }
-    .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: #63e6b0; box-shadow: 0 0 13px #63e6b0;
-    }
-    header { text-align: center; padding: 25px 0 36px; }
-    .eyebrow {
-      margin-bottom: 13px; color: #a8bbd1; font-size: .84rem;
-      font-weight: 750; letter-spacing: .17em; text-transform: uppercase;
-    }
-    h1 {
-      color: var(--text); font-size: clamp(2.6rem, 8vw, 5.5rem);
-      line-height: .96; font-weight: 950; letter-spacing: -.067em;
-      text-transform: uppercase;
-      text-shadow: 0 8px 35px rgba(73,180,235,.17);
-    }
-    h1 span {
-      background: linear-gradient(100deg, #8ce2ff, #61bce9 55%, #b8b1ff);
-      -webkit-background-clip: text; background-clip: text; color: transparent;
-    }
-    .subtitle {
-      max-width: 570px; margin: 19px auto 0; color: var(--muted);
-      font-size: 1rem; line-height: 1.75;
-    }
-    .host-line { margin-top: 17px; color: #b7c7d9; font-size: .92rem; }
-    .host-line strong { color: var(--sky); }
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-    .section-title {
-      display: flex; align-items: center; gap: 13px; margin: 10px 0 18px;
-      color: #dbeaff; font-size: .8rem; font-weight: 850;
-      letter-spacing: .16em; text-transform: uppercase;
-    }
-    .section-title::after {
-      content: ""; flex: 1; height: 1px;
-      background: linear-gradient(90deg, var(--border), transparent);
-    }
-    .prize-grid {
-      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px;
-    }
-    .prize {
-      min-height: 148px; padding: 21px 12px;
-      display: flex; flex-direction: column; justify-content: center; align-items: center;
-      text-align: center; border: 1px solid var(--border); border-radius: 25px;
-      background: linear-gradient(145deg, rgba(255,255,255,.105), rgba(255,255,255,.025));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 12px 28px rgba(0,0,0,.12);
-      backdrop-filter: blur(14px);
-      transition: transform .22s ease, border-color .22s ease, background .22s ease;
-    }
-    .prize:hover {
-      transform: translateY(-5px);
-      border-color: rgba(117,213,255,.55);
-      background: linear-gradient(145deg, rgba(117,213,255,.16), rgba(255,255,255,.035));
-    }
-    .prize.featured {
-      border-color: rgba(117,213,255,.36);
-      background: linear-gradient(145deg, rgba(73,174,224,.2), rgba(143,132,240,.09));
-    }
-    .place {
-      color: #a9bdd0; font-size: .69rem; font-weight: 850;
-      letter-spacing: .13em; text-transform: uppercase;
-    }
-    .amount {
-      margin: 10px 0 5px; color: #f7fbff;
-      font-size: clamp(1.55rem, 4vw, 2.15rem); font-weight: 950; letter-spacing: -.05em;
-    }
-    .amount small { color: var(--sky); font-size: .72rem; letter-spacing: 0; }
-    .note { color: #9aacc1; font-size: .76rem; }
+<style>
+:root {
+    --bg: #080810;
+    --card: #11111d;
+    --red: #ff254c;
+    --purple: #a855f7;
+    --cyan: #00f0ff;
+    --white: #f5f5ff;
+    --muted: #88889e;
+}
 
-    .details {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 29px;
-    }
-    .detail-card {
-      padding: 23px; border: 1px solid var(--border); border-radius: 25px;
-      background: linear-gradient(145deg, rgba(255,255,255,.09), rgba(255,255,255,.025));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 12px 28px rgba(0,0,0,.1);
-      backdrop-filter: blur(14px);
-    }
-    .detail-label {
-      color: #a9bdd0; font-size: .72rem; font-weight: 850;
-      letter-spacing: .14em; text-transform: uppercase;
-    }
-    .detail-value {
-      margin-top: 9px; color: var(--sky);
-      font-size: clamp(1.8rem, 5vw, 2.4rem); font-weight: 950; letter-spacing: -.05em;
-    }
-    .detail-hint { margin-top: 4px; color: #9aacc1; font-size: .8rem; }
-    .mvp-note {
-      margin-top: 17px; padding: 18px 21px; border: 1px solid rgba(117,213,255,.24);
-      border-radius: 22px;
-      background: linear-gradient(100deg, rgba(68,165,215,.13), rgba(150,139,245,.08));
-      color: #b5c8da; line-height: 1.65; text-align: center; font-size: .92rem;
-      backdrop-filter: blur(12px);
-    }
-    .mvp-note strong { color: var(--sky); }
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
 
-    .register {
-      margin-top: 29px; padding: clamp(23px, 4vw, 34px); text-align: center;
-      border: 1px solid rgba(117,213,255,.27); border-radius: 30px;
-      background:
-        radial-gradient(circle at 50% 0%, rgba(117,213,255,.16), transparent 68%),
-        linear-gradient(145deg, rgba(255,255,255,.09), rgba(255,255,255,.025));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-      backdrop-filter: blur(16px);
-    }
-    .register h2 { color: #f1f7ff; font-size: clamp(1.35rem, 4vw, 1.9rem); letter-spacing: -.035em; }
-    .register p { margin: 10px 0 21px; color: var(--muted); line-height: 1.65; }
-    .bot-button {
-      display: inline-flex; justify-content: center; align-items: center; gap: 10px;
-      max-width: 100%; padding: 15px 25px; border: 1px solid rgba(255,255,255,.35);
-      border-radius: 999px; color: #061421;
-      background: linear-gradient(105deg, #8ce2ff, #58b9e7 58%, #bcb4ff);
-      box-shadow: 0 10px 32px rgba(75,177,226,.25);
-      text-decoration: none; font-weight: 900; overflow-wrap: anywhere;
-      transition: transform .2s ease, box-shadow .2s ease;
-    }
-    .bot-button:hover { transform: translateY(-3px); box-shadow: 0 15px 38px rgba(75,177,226,.36); }
-    .register small { display: block; margin-top: 14px; color: #8498ad; }
-    footer {
-      display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px;
-      margin-top: 29px; padding-top: 21px; border-top: 1px solid var(--border);
-      color: #8fa2b8; font-size: .8rem;
-    }
-    footer strong { color: #dceaff; letter-spacing: .14em; }
+html {
+    scroll-behavior: smooth;
+}
 
-    @media (max-width: 650px) {
-      body { padding: 16px 10px; }
-      .page { border-radius: 28px; }
-      .prize-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .prize { min-height: 132px; border-radius: 21px; }
+body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: 'Rajdhani', sans-serif;
+    overflow-x: hidden;
+}
+
+/* BACKGROUND */
+
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    background:
+        radial-gradient(ellipse at 15% 15%, #ff254c18, transparent 40%),
+        radial-gradient(ellipse at 85% 40%, #a855f718, transparent 40%),
+        radial-gradient(ellipse at 50% 100%, #00f0ff0c, transparent 45%);
+}
+
+.grid-bg {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: .12;
+    background-image:
+        linear-gradient(#ffffff12 1px, transparent 1px),
+        linear-gradient(90deg, #ffffff12 1px, transparent 1px);
+    background-size: 45px 45px;
+    mask-image: linear-gradient(to bottom, black, transparent 90%);
+}
+
+/* NAVBAR */
+
+nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 22px 8%;
+    border-bottom: 1px solid #ffffff12;
+    backdrop-filter: blur(15px);
+}
+
+.logo {
+    font-family: Orbitron;
+    font-weight: 900;
+    font-size: 21px;
+    letter-spacing: 4px;
+}
+
+.logo span {
+    color: var(--red);
+}
+
+.status {
+    color: #5dffb0;
+    font-size: 13px;
+    letter-spacing: 2px;
+    font-weight: 700;
+}
+
+.status::before {
+    content: "";
+    display: inline-block;
+    height: 8px;
+    width: 8px;
+    border-radius: 50%;
+    background: #5dffb0;
+    margin-right: 8px;
+    box-shadow: 0 0 12px #5dffb0;
+    animation: pulse 1.5s infinite;
+}
+
+/* HERO */
+
+.hero {
+    min-height: 620px;
+    padding: 110px 20px 90px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    position: relative;
+}
+
+.eyebrow {
+    color: var(--red);
+    font-family: Orbitron;
+    font-size: 11px;
+    letter-spacing: 5px;
+    margin-bottom: 25px;
+}
+
+.hero h1 {
+    font-family: Orbitron;
+    font-size: clamp(48px, 10vw, 105px);
+    font-weight: 900;
+    line-height: .95;
+    letter-spacing: -4px;
+    text-shadow: 0 0 40px #ff254c35;
+}
+
+.hero h1 span {
+    display: block;
+    color: transparent;
+    -webkit-text-stroke: 1.5px var(--red);
+}
+
+.hero p {
+    max-width: 480px;
+    color: #aaaabe;
+    font-size: 19px;
+    margin-top: 30px;
+    line-height: 1.5;
+}
+
+.hero-tags {
+    display: flex;
+    gap: 12px;
+    margin-top: 28px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.tag {
+    padding: 8px 17px;
+    background: #ffffff08;
+    border: 1px solid #ffffff20;
+    border-radius: 3px;
+    font-size: 12px;
+    letter-spacing: 2px;
+    font-weight: 700;
+}
+
+.tag.red {
+    border-color: #ff254c80;
+    color: var(--red);
+}
+
+.hero-line {
+    position: absolute;
+    bottom: 0;
+    width: 70%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--red), transparent);
+}
+
+/* SECTION */
+
+section {
+    padding: 75px 8%;
+}
+
+.section-label {
+    color: var(--red);
+    font-family: Orbitron;
+    font-size: 11px;
+    letter-spacing: 4px;
+    text-align: center;
+}
+
+.section-title {
+    text-align: center;
+    font-family: Orbitron;
+    font-size: clamp(25px, 5vw, 38px);
+    font-weight: 800;
+    margin-top: 12px;
+    margin-bottom: 45px;
+}
+
+/* PRIZE CARDS */
+
+.prizes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    max-width: 1000px;
+    margin: auto;
+}
+
+.prize-card {
+    background: linear-gradient(145deg, #171725, #0d0d17);
+    border: 1px solid #ffffff15;
+    border-radius: 12px;
+    padding: 35px 20px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    transition: .35s;
+}
+
+.prize-card:hover {
+    transform: translateY(-9px);
+    border-color: var(--red);
+    box-shadow: 0 15px 40px #ff254c20;
+}
+
+.prize-card.first {
+    border-color: #ffc85770;
+    background: linear-gradient(145deg, #292012, #11111d);
+}
+
+.prize-card::before {
+    content: "";
+    position: absolute;
+    width: 150px;
+    height: 150px;
+    background: #ff254c12;
+    filter: blur(60px);
+    top: -70px;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.medal {
+    font-size: 35px;
+    margin-bottom: 15px;
+}
+
+.place {
+    font-family: Orbitron;
+    font-size: 13px;
+    letter-spacing: 2px;
+    color: #aaaabe;
+}
+
+.amount {
+    font-family: Orbitron;
+    font-size: clamp(30px, 5vw, 43px);
+    font-weight: 900;
+    margin: 17px 0 8px;
+}
+
+.first .amount {
+    color: #ffc857;
+    text-shadow: 0 0 20px #ffc85750;
+}
+
+.prize-card:nth-child(2) .amount {
+    color: #d1d5e5;
+}
+
+.prize-card:nth-child(3) .amount {
+    color: #d88c5a;
+}
+
+.prize-card small {
+    color: var(--muted);
+    font-size: 14px;
+}
+
+/* MVP */
+
+.mvp {
+    max-width: 1000px;
+    margin: 55px auto 0;
+    padding: 32px;
+    background: linear-gradient(110deg, #2a1020, #17101e, #10101b);
+    border: 1px solid #ff254c70;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    position: relative;
+    overflow: hidden;
+}
+
+.mvp::after {
+    content: "MVP";
+    position: absolute;
+    right: 10px;
+    top: -25px;
+    font-family: Orbitron;
+    font-size: 100px;
+    font-weight: 900;
+    color: #ffffff05;
+    pointer-events: none;
+}
+
+.mvp h3 {
+    font-family: Orbitron;
+    font-size: 19px;
+    color: var(--red);
+    margin-bottom: 10px;
+}
+
+.mvp p {
+    color: #c4c4d4;
+    font-size: 16px;
+    max-width: 540px;
+    line-height: 1.6;
+}
+
+.mvp-reward {
+    font-family: Orbitron;
+    font-weight: 900;
+    font-size: 35px;
+    color: #fff;
+    white-space: nowrap;
+    text-shadow: 0 0 20px #ff254c80;
+}
+
+.mvp-reward span {
+    color: var(--red);
+}
+
+/* ENTRY */
+
+.entry-wrap {
+    max-width: 700px;
+    margin: auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+}
+
+.info-card {
+    padding: 27px;
+    background: var(--card);
+    border: 1px solid #ffffff15;
+    border-radius: 10px;
+}
+
+.info-card h3 {
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: 3px;
+    margin-bottom: 12px;
+}
+
+.info-card strong {
+    font-family: Orbitron;
+    font-size: 27px;
+}
+
+.info-card .free {
+    color: #5dffb0;
+}
+
+.info-card p {
+    color: var(--muted);
+    margin-top: 8px;
+}
+
+/* REGISTRATION */
+
+.registration {
+    text-align: center;
+    padding: 95px 20px;
+    background: linear-gradient(180deg, transparent, #ff254c09, transparent);
+}
+
+.registration h2 {
+    font-family: Orbitron;
+    font-size: clamp(28px, 6vw, 48px);
+    margin: 15px 0;
+}
+
+.registration p {
+    color: #aaaabe;
+    font-size: 18px;
+    max-width: 500px;
+    margin: 0 auto 35px;
+}
+
+.telegram-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 13px;
+    padding: 19px 32px;
+    background: var(--red);
+    color: white;
+    text-decoration: none;
+    font-family: Orbitron;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    border-radius: 5px;
+    box-shadow: 0 0 30px #ff254c55;
+    transition: .3s;
+}
+
+.telegram-btn:hover {
+    transform: translateY(-5px) scale(1.03);
+    box-shadow: 0 0 50px #ff254c90;
+}
+
+.telegram-btn span {
+    font-size: 23px;
+}
+
+.bot-name {
+    margin-top: 20px;
+    color: var(--cyan);
+    font-size: 15px;
+    letter-spacing: 2px;
+}
+
+/* FOOTER */
+
+footer {
+    border-top: 1px solid #ffffff12;
+    text-align: center;
+    padding: 35px 15px;
+}
+
+.footer-logo {
+    font-family: Orbitron;
+    font-weight: 900;
+    letter-spacing: 5px;
+    font-size: 22px;
+}
+
+footer p {
+    color: var(--muted);
+    margin-top: 12px;
+    font-size: 14px;
+}
+
+footer a {
+    color: var(--red);
+    text-decoration: none;
+}
+
+.copyright {
+    margin-top: 25px;
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #55556b;
+}
+
+/* ANIMATION */
+
+@keyframes pulse {
+    50% { opacity: .35; box-shadow: 0 0 3px #5dffb0; }
+}
+
+@media(max-width: 700px) {
+    nav { padding: 20px 6%; }
+    .hero { min-height: 550px; }
+    section { padding: 60px 6%; }
+    .prizes { grid-template-columns: 1fr; }
+    .prize-card { padding: 28px 20px; }
+    .mvp {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 25px;
     }
-    @media (max-width: 390px) {
-      .details { grid-template-columns: 1fr; }
-      .bot-button { width: 100%; padding: 14px 12px; font-size: .9rem; }
+    .mvp-reward { font-size: 32px; }
+    .entry-wrap { grid-template-columns: 1fr; }
+    .hero h1 { letter-spacing: -2px; }
+}
+
+@media(prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .01ms !important;
+        transition-duration: .01ms !important;
+        scroll-behavior: auto !important;
     }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
-    }
-  </style>
+}
+</style>
 </head>
+
 <body>
-  <main class="page">
-    <div class="topline"><span class="dot"></span> Tournament registration</div>
 
-    <header>
-      <p class="eyebrow">Hosted by Erebus</p>
-      <h1>Free Fire<br><span>Showdown</span></h1>
-      <p class="subtitle">Bring your squad, bring your strategy, and compete for the prizes. Your next match starts here.</p>
-      <p class="host-line">Presented by <strong>Haze</strong> · <strong>@noxmirage</strong></p>
-    </header>
+<div class="grid-bg"></div>
 
-    <section aria-labelledby="prizes-heading">
-      <h2 class="section-title" id="prizes-heading">Prize pool</h2>
-      <div class="prize-grid">
-        <article class="prize">
-          <span class="place">1st place</span>
-          <div class="amount">₹180</div>
-          <span class="note">UPI or redeem</span>
-        </article>
-        <article class="prize">
-          <span class="place">2nd place</span>
-          <div class="amount">₹130</div>
-          <span class="note">UPI or redeem</span>
-        </article>
-        <article class="prize">
-          <span class="place">3rd place</span>
-          <div class="amount">₹90</div>
-          <span class="note">UPI or redeem</span>
-        </article>
-        <article class="prize featured">
-          <span class="place">MVP team's</span>
-          <div class="amount">₹5 <small>/ kill</small></div>
-          <span class="note">kills of MVP Player</span>
-        </article>
-      </div>
-    </section>
+<nav>
+    <div class="logo">ERE<span>BUS</span></div>
+    <div class="status">REGISTRATION OPEN</div>
+</nav>
 
-    <section class="details" aria-label="Tournament details">
-      <div class="detail-card">
-        <div class="detail-label">Entry fee · per team</div>
-        <div class="detail-value">₹51</div>
-        <div class="detail-hint">One team, one entry</div>
-      </div>
-      <div class="detail-card">
-        <div class="detail-label">Registration</div>
-        <div class="detail-value">Open</div>
-        <div class="detail-hint">Register through Telegram</div>
-      </div>
-    </section>
+<!-- HERO -->
 
-    <p class="mvp-note"><strong>MVP team reward:</strong> ₹5 for every kill scored by the team player . The Highest one❗ </p>
+<header class="hero">
+    <div class="eyebrow">THE BATTLE BEGINS HERE</div>
 
-    <section class="register" aria-labelledby="register-heading">
-      <h2 id="register-heading">Ready to enter the arena?</h2>
-      <p>Tap below to open the official tournament bot and follow the registration instructions.</p>
-      <a class="bot-button" href="https://t.me/ErebusFFTournamentBot" target="_blank" rel="noopener noreferrer">
-        <span aria-hidden="true">➤</span> @ErebusFFTournamentBot
-      </a>
-      <small>Official registration on Telegram</small>
-    </section>
+    <h1>
+        FREE FIRE
+        <span>SHOWDOWN</span>
+    </h1>
 
-    <footer>
-      <strong>EREBUS</strong>
-      <span>Hosted by Haze</span>
-      <span>@noxmirage</span>
-    </footer>
-  </main>
+    <p>
+        Bring your squad. Bring your strategy.
+        Eliminate the competition and fight your way
+        to the top. Only the strongest survive.
+    </p>
+
+    <div class="hero-tags">
+        <div class="tag red">SQUAD BATTLE</div>
+        <div class="tag">₹400 PRIZE POOL</div>
+        <div class="tag">OPEN ENTRY</div>
+    </div>
+
+    <div class="hero-line"></div>
+</header>
+
+<!-- PRIZES -->
+
+<section>
+    <div class="section-label">VICTORY HAS A PRICE</div>
+    <h2 class="section-title">THE PRIZE POOL</h2>
+
+    <div class="prizes">
+
+        <div class="prize-card first">
+            <div class="medal">🥇</div>
+            <div class="place">1ST PLACE</div>
+            <div class="amount">₹180</div>
+            <small>UPI OR REDEEM</small>
+        </div>
+
+        <div class="prize-card">
+            <div class="medal">🥈</div>
+            <div class="place">2ND PLACE</div>
+            <div class="amount">₹130</div>
+            <small>UPI OR REDEEM</small>
+        </div>
+
+        <div class="prize-card">
+            <div class="medal">🥉</div>
+            <div class="place">3RD PLACE</div>
+            <div class="amount">₹90</div>
+            <small>UPI OR REDEEM</small>
+        </div>
+
+    </div>
+
+    <!-- MVP REWARD -->
+
+    <div class="mvp">
+        <div>
+            <h3>⚡ INDIVIDUAL MVP REWARD</h3>
+            <p>
+                Only ONE player wins this reward!
+                The player with the highest number of kills
+                in the winning team will be declared MVP.
+                The MVP receives ₹5 for EVERY kill scored.
+                This reward is exclusively for that one player,
+                not the entire team.
+            </p>
+        </div>
+
+        <div class="mvp-reward">
+            ₹5<span>/KILL</span>
+        </div>
+    </div>
+</section>
+
+<!-- ENTRY DETAILS -->
+
+<section>
+    <div class="section-label">YOUR ENTRY TO GLORY</div>
+    <h2 class="section-title">TOURNAMENT INFO</h2>
+
+    <div class="entry-wrap">
+
+        <div class="info-card">
+            <h3>ENTRY FEE / TEAM</h3>
+            <strong>₹51</strong>
+            <p>One squad. One registration.</p>
+        </div>
+
+        <div class="info-card">
+            <h3>REGISTRATION STATUS</h3>
+            <strong class="free">OPEN</strong>
+            <p>Register through Telegram.</p>
+        </div>
+
+    </div>
+</section>
+
+<!-- REGISTRATION -->
+
+<div class="registration">
+    <div class="section-label">NO FEAR. NO MERCY. JUST SKILL.</div>
+
+    <h2>READY TO ENTER<br>THE ARENA?</h2>
+
+    <p>
+        Your squad. Your moment. Your victory.
+        Tap below to access the official tournament
+        bot and complete your registration.
+    </p>
+
+    <a class="telegram-btn"
+       href="https://t.me/ErebusFFTournamentBot"
+       target="_blank"
+       rel="noopener noreferrer">
+        <span>➤</span>
+        REGISTER ON TELEGRAM
+    </a>
+
+    <div class="bot-name">@ErebusFFTournamentBot</div>
+</div>
+
+<!-- FOOTER -->
+
+<footer>
+    <div class="footer-logo">EREBUS</div>
+
+    <p>Hosted by <strong>Haze</strong></p>
+
+    <p>
+        Presented by
+        <a href="https://t.me/noxmirage" target="_blank" rel="noopener noreferrer">
+            @noxmirage
+        </a>
+    </p>
+
+    <div class="copyright">
+        © 2026 EREBUS SHOWDOWN · ALL RIGHTS RESERVED
+    </div>
+</footer>
+
 </body>
 </html>
