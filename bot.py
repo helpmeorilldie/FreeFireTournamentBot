@@ -62,7 +62,7 @@ def run():
 def keep_alive():
     server = Thread(target=run, daemon=True)
     server.start()
-
+keep_alive()
 
 # ----------------------------------------------------------------------------
 # Configuration
@@ -1822,7 +1822,6 @@ async def admin_restore_do(message: Message, state: FSMContext):
 # ----------------------------------------------------------------------------
 async def main():
     init_db()
-    keep_alive()
     spawn(backup_loop())
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("Bot running - Hosted By Erebus")
