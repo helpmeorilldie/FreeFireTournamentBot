@@ -14,6 +14,10 @@ import shutil
 import sqlite3
 import tempfile
 import time as _time
+#Only for tha flask and web if removing web then remove import too and from requirements.txt the module instalation
+from flask import Flask, send_from_directory
+from threading import Thread
+
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from io import BytesIO
