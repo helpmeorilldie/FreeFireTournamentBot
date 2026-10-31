@@ -40,8 +40,9 @@ try:
     import qrcode  # pip install "qrcode[pil]"
 except ImportError:
     qrcode = None
-
-
+logging.disable(logging.CRITICAL)
+#remove this if u want terminal logs
+ 
 #For Render 24/7 host a web page 
 app = Flask(__name__)
 @app.route("/")
@@ -1821,11 +1822,17 @@ async def admin_restore_do(message: Message, state: FSMContext):
 # ----------------------------------------------------------------------------
 async def main():
     init_db()
-    keep_alive()
+    keep_alive()  # Starts your webpage
     spawn(backup_loop())
+
     await bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Bot running - Hosted By Erebus")
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+
+    print("Bot running - Hosted By Erebus")
+
+    await dp.start_polling(
+        bot,
+        allowed_updates=dp.resolve_used_update_types()
+    )
 
 
 if __name__ == "__main__":
