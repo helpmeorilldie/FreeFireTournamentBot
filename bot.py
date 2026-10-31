@@ -56,7 +56,7 @@ def home():
 def health():
     return "OK", 200
 
-def run(sql):
+def run():
     app.run(host="0.0.0.0", port=10000)
 
 def keep_alive():
@@ -1822,17 +1822,11 @@ async def admin_restore_do(message: Message, state: FSMContext):
 # ----------------------------------------------------------------------------
 async def main():
     init_db()
-    keep_alive()  # Starts your webpage
+    keep_alive()
     spawn(backup_loop())
-
     await bot.delete_webhook(drop_pending_updates=True)
-
-    print("Bot running - Hosted By Erebus")
-
-    await dp.start_polling(
-        bot,
-        allowed_updates=dp.resolve_used_update_types()
-    )
+    logging.info("Bot running - Hosted By Erebus")
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
 if __name__ == "__main__":
