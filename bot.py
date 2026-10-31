@@ -56,7 +56,7 @@ def home():
 def health():
     return "OK", 200
 
-def run():
+def run(sql):
     app.run(host="0.0.0.0", port=10000)
 
 def keep_alive():
