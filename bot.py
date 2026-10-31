@@ -523,7 +523,7 @@ def home_text(name):
         head("title", "Free Fire Tournaments", " ❗️"),
         "",
         row("trophy", "Open Tournaments", open_n),
-        row("pay", "Entry Fee", f"₹{DEFAULT_FEE} {sc('per team')}"),
+        row("pay", "Entry Fee", f"₹51 {sc('per team')}"),
         row("warn", "Min Level", MIN_LEVEL),
         SEP,
         f"{E('bolt')} {sc('Tap Tournaments to register your team.')}",
