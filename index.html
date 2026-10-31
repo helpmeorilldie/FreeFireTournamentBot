@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Erebus Free Fire Tournament · Glass UI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        body {
+            min-height: 100vh;
+            background: linear-gradient(145deg, #1a1f2b 0%, #2f3b4f 100%);
+            /* subtle grey‑blue gradient with a soft sky tint */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* decorative soft orbs (glass atmosphere) */
+        body::before {
+            content: "";
+            position: absolute;
+            width: 60vmax;
+            height: 60vmax;
+            background: radial-gradient(circle at 30% 40%, rgba(135, 206, 235, 0.25), transparent 70%);
+            border-radius: 50%;
+            top: -20vmax;
+            left: -20vmax;
+            z-index: 0;
+        }
+
+        body::after {
+            content: "";
+            position: absolute;
+            width: 80vmax;
+            height: 80vmax;
+            background: radial-gradient(circle at 80% 70%, rgba(176, 196, 222, 0.2), transparent 70%);
+            border-radius: 50%;
+            bottom: -30vmax;
+            right: -20vmax;
+            z-index: 0;
+        }
+
+        .glass-card {
+            position: relative;
+            z-index: 10;
+            max-width: 800px;
+            width: 100%;
+            background: rgba(210, 225, 240, 0.15);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            border-radius: 3rem 1rem 3rem 1rem;
+            box-shadow: 0 30px 50px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+            padding: 2.5rem 2rem;
+            color: #f0f7ff;
+            transition: transform 0.2s ease;
+        }
+
+        /* typography */
+        h1 {
+            font-size: 2.8rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+            text-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+            background: linear-gradient(135deg, #ffffff, #d4e6ff);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            margin-bottom: 0.2rem;
+            text-align: center;
+        }
+
+        .host {
+            text-align: center;
+            font-size: 1.4rem;
+            font-weight: 400;
+            color: #b9d9ff;
+            letter-spacing: 0.5px;
+            margin-bottom: 1.2rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.3rem;
+        }
+
+        .host span {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(8px);
+            padding: 0.2rem 0.8rem;
+            border-radius: 40px;
+            font-size: 1rem;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #e0efff;
+            font-weight: 500;
+            display: inline-block;
+        }
+
+        .host .by {
+            font-weight: 300;
+            opacity: 0.8;
+        }
+
+        .host .handle {
+            font-weight: 600;
+            color: #aad4ff;
+            letter-spacing: 0.3px;
+        }
+
+        .divider {
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(160, 200, 255, 0.6), transparent);
+            margin: 1.8rem 0 2rem;
+            border-radius: 10px;
+        }
+
+        /* grid for prizes */
+        .prize-grid {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 1.2rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .prize-item {
+            background: rgba(150, 180, 210, 0.2);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 2rem;
+            padding: 1.2rem 1.5rem;
+            min-width: 130px;
+            flex: 1 0 auto;
+            text-align: center;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+            transition: all 0.25s;
+            color: #eef5ff;
+        }
+
+        .prize-item:hover {
+            background: rgba(180, 210, 240, 0.3);
+            border-color: rgba(255, 255, 255, 0.5);
+            transform: translateY(-4px);
+        }
+
+        .prize-label {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-weight: 400;
+            color: #b8d4f0;
+            margin-bottom: 0.4rem;
+        }
+
+        .prize-value {
+            font-size: 2rem;
+            font-weight: 800;
+            color: #ffffff;
+            text-shadow: 0 2px 10px rgba(0, 150, 255, 0.5);
+            line-height: 1.2;
+        }
+
+        .prize-value small {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #c9e0ff;
+            letter-spacing: 0.5px;
+            margin-left: 0.2rem;
+        }
+
+        .prize-note {
+            font-size: 0.8rem;
+            margin-top: 0.3rem;
+            color: #c0d6ed;
+            opacity: 0.9;
+            font-weight: 300;
+            letter-spacing: 0.4px;
+        }
+
+        /* kill prize special */
+        .kill-prize {
+            background: rgba(90, 150, 210, 0.3);
+            border: 1px solid rgba(150, 220, 255, 0.5);
+        }
+
+        .kill-prize .prize-value {
+            color: #ccf0ff;
+        }
+
+        /* entry fee + registration */
+        .entry-reg {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .entry-fee {
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(8px);
+            border-radius: 3rem;
+            padding: 1rem 2rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            align-self: center;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        }
+
+        .entry-fee .fee-text {
+            font-size: 1.3rem;
+            font-weight: 400;
+            color: #d6e6ff;
+        }
+
+        .entry-fee .fee-amount {
+            font-size: 2.2rem;
+            font-weight: 800;
+            color: #ffffff;
+            background: linear-gradient(135deg, #d4edff, #a5d0ff);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            letter-spacing: -0.5px;
+            text-shadow: 0 0 20px rgba(0, 180, 255, 0.6);
+        }
+
+        .register-badge {
+            background: rgba(160, 210, 255, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.45);
+            border-radius: 3rem;
+            padding: 1rem 2rem;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            transition: all 0.2s;
+            cursor: default;
+        }
+
+        .register-badge:hover {
+            background: rgba(180, 220, 255, 0.35);
+            border-color: rgba(255, 255, 255, 0.8);
+        }
+
+        .register-badge .bot-handle {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #ffffff;
+            text-shadow: 0 0 15px rgba(0, 180, 255, 0.5);
+            letter-spacing: -0.5px;
+        }
+
+        .register-badge .bot-handle span {
+            font-weight: 300;
+            font-size: 1.3rem;
+            color: #b8d9ff;
+            margin-right: 0.3rem;
+        }
+
+        .register-badge .instruction {
+            font-size: 1rem;
+            color: #d0e4ff;
+            margin-top: 0.3rem;
+            font-weight: 300;
+            letter-spacing: 0.3px;
+        }
+
+        /* footer / host note */
+        .host-footer {
+            text-align: center;
+            margin-top: 2rem;
+            font-size: 1.1rem;
+            color: #bfd9f0;
+            border-top: 1px solid rgba(255, 255, 255, 0.15);
+            padding-top: 1.5rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .host-footer .erebus {
+            font-weight: 700;
+            color: #e3f0ff;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 0.2rem 1rem;
+            border-radius: 30px;
+            font-size: 1.2rem;
+            letter-spacing: 0.5px;
+        }
+
+        .host-footer .haze {
+            font-weight: 600;
+            color: #aad0ff;
+        }
+
+        .host-footer .nox {
+            font-weight: 600;
+            color: #aad0ff;
+        }
+
+        /* small screens */
+        @media (max-width: 550px) {
+            .glass-card {
+                padding: 1.8rem 1.2rem;
+                border-radius: 2rem 0.8rem 2rem 0.8rem;
+            }
+            h1 {
+                font-size: 2rem;
+            }
+            .host {
+                font-size: 1.1rem;
+            }
+            .prize-value {
+                font-size: 1.5rem;
+            }
+            .prize-item {
+                padding: 0.9rem 0.8rem;
+                min-width: 105px;
+            }
+            .entry-fee {
+                padding: 0.8rem 1.2rem;
+            }
+            .entry-fee .fee-amount {
+                font-size: 1.8rem;
+            }
+            .register-badge .bot-handle {
+                font-size: 1.4rem;
+            }
+            .register-badge .bot-handle span {
+                font-size: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="glass-card">
+        <h1>FREE FIRE<br>TOURNAMENT</h1>
+        <div class="host">
+            <span>hosted by <span class="handle">Erebus</span></span>
+            <span class="by">by</span>
+            <span class="handle">haze</span>
+            <span>@noxmirage</span>
+        </div>
+
+        <!-- prizes section -->
+        <div class="prize-grid">
+            <div class="prize-item">
+                <div class="prize-label">1st Prize</div>
+                <div class="prize-value">₹180<small> INR</small></div>
+                <div class="prize-note">UPI or Redeem</div>
+            </div>
+            <div class="prize-item">
+                <div class="prize-label">2nd Prize</div>
+                <div class="prize-value">₹130</div>
+                <div class="prize-note">UPI / Redeem</div>
+            </div>
+            <div class="prize-item">
+                <div class="prize-label">3rd Prize</div>
+                <div class="prize-value">₹90</div>
+                <div class="prize-note">UPI / Redeem</div>
+            </div>
+            <div class="prize-item kill-prize">
+                <div class="prize-label">Highest Kill</div>
+                <div class="prize-value">₹60</div>
+                <div class="prize-note">solo MVP</div>
+            </div>
+        </div>
+
+        <!-- entry fee & registration -->
+        <div class="entry-reg">
+            <div class="entry-fee">
+                <span class="fee-text">Entry Fee (per team)</span>
+                <span class="fee-amount">₹51</span>
+            </div>
+            <div class="register-badge">
+                <div class="bot-handle">
+                    <span>@</span>ErebusTournament Bot
+                </div>
+                <div class="instruction">Register via Telegram</div>
+            </div>
+        </div>
+
+        <!-- footer with host details -->
+        <div class="host-footer">
+            <span class="erebus">EREBUS</span>
+            <span>by haze</span>
+            <span class="nox">@noxmirage</span>
+        </div>
+    </div>
+</body>
+</html>
