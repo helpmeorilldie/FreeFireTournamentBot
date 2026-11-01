@@ -40,6 +40,9 @@ try:
     import qrcode  # pip install "qrcode[pil]"
 except ImportError:
     qrcode = None
+
+
+# Keep diagnostics enabled for bot operations.
 logging.disable(logging.CRITICAL)
 #remove this if u want terminal logs
  
@@ -55,6 +58,7 @@ def home():
 @app.route("/health")
 def health():
     return "OK", 200
+
 
 def run():
     app.run(host="0.0.0.0", port=10000)
@@ -75,7 +79,6 @@ REQUIRED_CHATS = [c.strip() for c in os.getenv("REQUIRED_CHATS", "@ecochamber").
 STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID", "0") or 0)   # private channel, bot = admin
 UPI_ID = os.getenv("UPI_ID", "Ahmadammar@fam")
 UPI_NAME = os.getenv("UPI_NAME", "Erebus Tournament")
-DEFAULT_FEE = int(os.getenv("DEFAULT_FEE", "49"))
 MIN_LEVEL = 25
 DB_PATH = Path(os.getenv("DB_PATH", "data/erebus_ff.sqlite3"))
 BACKUP_DIR = Path(os.getenv("BACKUP_DIR", "backups"))
@@ -201,6 +204,11 @@ def row(emoji, label, value):
 
 def esc(value):
     return html.escape(str(value if value is not None else ""))
+
+
+def fee_label(fee):
+    """Human-friendly price; zero means the admin made the tournament free."""
+    return sc("Free") if int(fee or 0) == 0 else f"₹{int(fee)}"
 
 
 _TRASH = {}     # chat_id -> ids of temporary messages (prompts, QR pictures ...)
@@ -335,9 +343,23 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'pending',   -- pending / query / approved / rejected
             reason TEXT, created_at TEXT NOT NULL, reviewed_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS registration_uids (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            registration_id INTEGER NOT NULL,
+            slot INTEGER NOT NULL,
+            uid TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            reason TEXT,
+            reviewed_at TEXT,
+            UNIQUE(registration_id, slot)
+        );
         CREATE TABLE IF NOT EXISTS thread (
             id INTEGER PRIMARY KEY AUTOINCREMENT, reg_id INTEGER NOT NULL, sender TEXT NOT NULL,
             body TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, sender TEXT NOT NULL,
+            body TEXT, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open'
         );
         CREATE TABLE IF NOT EXISTS updates (
             id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, created_at TEXT NOT NULL
@@ -386,6 +408,38 @@ def get_user(uid):
 
 def used_slots(tid):
     return count("SELECT COUNT(*) FROM registrations WHERE tournament_id=? AND status!='rejected'", (tid,))
+
+
+def team_size(mode):
+    """Return the number of player UIDs required by a tournament mode."""
+    value = str(mode or "squad").strip().lower()
+    if "solo" in value:
+        return 1
+    if "duo" in value:
+        return 2
+    return 4
+
+
+def normalize_mode(value):
+    value = str(value or "").strip().lower()
+    if value in {"solo", "1", "solo match"}:
+        return "Solo"
+    if value in {"duo", "2", "duo match"}:
+        return "Duo"
+    if value in {"squad", "4", "squad match"}:
+        return "Squad"
+    return str(value).strip().title()[:30]
+
+
+def sync_registration_uids(registration_id, uid_text):
+    values = [value.strip() for value in str(uid_text or "").split(",") if value.strip()]
+    for slot, uid in enumerate(values, start=1):
+        run("INSERT OR IGNORE INTO registration_uids(registration_id, slot, uid) VALUES(?,?,?)",
+            (registration_id, slot, uid))
+
+
+def get_registration_uids(registration_id):
+    return q_all("SELECT * FROM registration_uids WHERE registration_id=? ORDER BY slot", (registration_id,))
 
 
 def log_thread(rid, sender, body):
@@ -452,7 +506,8 @@ async def backup_loop():
 # ----------------------------------------------------------------------------
 def home_keyboard(admin=False):
     rows = [
-        [btn("Tournaments", "trophy", style="primary", callback_data="tournaments")],
+        [btn("Tournaments", "trophy", style="primary", callback_data="tournaments"),
+         btn("Message Admin", "mail", style="primary", callback_data="support")],
         [btn("My Registrations", "box", callback_data="myregs"),
          btn("Updates", "bell", callback_data="updates")],
         [btn("How To Register", "pin", callback_data="howto"),
@@ -484,6 +539,7 @@ def admin_keyboard():
          btn("Post Update", "bell", callback_data="aupd")],
         [btn("Broadcast", "channel", callback_data="abc"),
          btn("Message A Team", "mail", callback_data="amsg")],
+        [btn("Support Inbox", "mail", style="primary", callback_data="asupport")],
         [btn("Statistics", "stats", callback_data="astats"),
          btn("Users", "user", callback_data="ausers")],
         [btn("Export CSV", "csv", callback_data="acsv"),
@@ -508,12 +564,29 @@ def admin_reply_kb(rid):
         [btn("Open Registration", "box", callback_data=f"areg:{rid}")]])
 
 
-def reg_admin_kb(rid, status):
+def reg_admin_kb(rid, status, uids=None):
     rows = []
+    uid_rows = get_registration_uids(rid)
+    if not uid_rows and uids:
+        sync_registration_uids(rid, uids)
+        uid_rows = get_registration_uids(rid)
     if status in ("pending", "query"):
-        rows.append([btn("Approve", "ok", style="success", callback_data=f"rok:{rid}"),
-                     btn("Reject", "err", style="danger", callback_data=f"rno:{rid}")])
+        rows.append([btn("Approve All", "ok", style="success", callback_data=f"rok:{rid}"),
+                     btn("Reject Team", "err", style="danger", callback_data=f"rno:{rid}")])
     rows.append([btn("Message Team", "mail", style="primary", callback_data=f"rmsg:{rid}")])
+    if uids is None:
+        registration = get_reg(rid)
+        uids = registration["uids"] if registration else ""
+    for item in uid_rows:
+        label = f"UID {item['slot']} · {item['uid']} · {item['status']}"
+        rows.append([btn(label, "web", url=f"https://freefirejornal.com/en/profile/{item['uid']}/")])
+        if item["status"] == "pending" and status in ("pending", "query"):
+            rows.append([btn(f"Approve UID {item['slot']}", "ok", style="success",
+                             callback_data=f"uok:{rid}:{item['slot']}"),
+                         btn(f"Reject UID {item['slot']}", "err", style="danger",
+                             callback_data=f"uno:{rid}:{item['slot']}")])
+    if uid_rows and status in ("pending", "query"):
+        rows.append([btn("Refresh UID Review", "spin", callback_data=f"areg:{rid}")])
     rows.append([btn("Back", "list", callback_data="alist:pending")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -528,10 +601,10 @@ def home_text(name):
         head("title", "Free Fire Tournaments", " ❗️"),
         "",
         row("trophy", "Open Tournaments", open_n),
-        row("pay", "Entry Fee", f"₹51 {sc('per team')}"),
-        row("warn", "Min Level", MIN_LEVEL),
+        row("pay", "Entry Fee", sc("Set by admin for each tournament")),
+        row("warn", "Manual Review", sc("Every UID is checked by an admin")),
         SEP,
-        f"{E('bolt')} {sc('Tap Tournaments to register your team.')}",
+        f"{E('bolt')} {sc('Choose a tournament first, then register your team.')}",
     ])
 
 
@@ -542,10 +615,10 @@ def howto_text():
         row("dot", "Step 1", sc("Open Tournaments and pick one")),
         row("dot", "Step 2", sc("Tap Register & Pay")),
         row("dot", "Step 3", sc("Send your team name")),
-        row("dot", "Step 4", sc("Send 4 player UIDs, one per line")),
-        row("dot", "Step 5", f"{sc('Confirm every player is Level')} {MIN_LEVEL}+"),
-        row("pay", "Step 6", sc("Scan the QR and pay the entry fee")),
-        row("camera", "Step 7", sc("Send the payment screenshot")),
+        row("dot", "Step 4", sc("Send the player UIDs required by the mode, one per line")),
+        row("dot", "Step 5", sc("Admin manually verifies every UID and level")),
+        row("pay", "Step 6", sc("Pay only if this tournament has a fee")),
+        row("camera", "Step 7", sc("Send the payment screenshot when payment is required")),
         row("wait", "Step 8", sc("Wait for admin approval")),
         SEP,
         f"{E('bell')} {sc('You get a message here when you are approved or rejected.')}",
@@ -557,12 +630,12 @@ def rules_text():
     return "\n".join([
         bq(f"{E('lock')} {sc('Rules & info')}"),
         "",
-        row("dot2", "Team", sc("4 players unless stated otherwise")),
+        row("dot2", "Team", sc("Solo = 1 · Duo = 2 · Squad = 4 players")),
         row("dot2", "Level", f"{sc('Every player must be Level')} {MIN_LEVEL}+"),
         row("dot2", "UIDs", sc("Use your real in-game UIDs only")),
         row("dot2", "Fair Play", sc("No hacks, panels or teaming")),
         row("dot2", "Timing", sc("Join the room on time")),
-        row("dot2", "Fee", f"₹{DEFAULT_FEE} {sc('per team, non refundable after approval')}"),
+        row("dot2", "Fee", sc("Set by admin; free tournaments are allowed")),
         row("dot2", "Room", sc("Room ID and password are sent here before the match")),
         row("dot2", "Decision", sc("Admin decision is final")),
         SEP,
@@ -606,8 +679,9 @@ def tour_text(t):
         "",
         row("game", "Mode", esc(t["mode"])),
         row("calendar", "Starts", esc(t["start_time"])),
-        row("pay", "Entry Fee", f"₹{t['fee']} {sc('per team')}"),
+        row("pay", "Entry Fee", fee_label(t['fee'])),
         row("star", "Prize", esc(t["prize"]) if t["prize"] else sc("To be announced")),
+        row("user", "Players", f"{team_size(t['mode'])} {sc('per team')}"),
         row("group", "Slots", f"{used_slots(t['id'])} / {t['slots']}"),
         row("warn", "Min Level", MIN_LEVEL),
     ]
@@ -621,6 +695,16 @@ def uid_lines(uids):
     return "\n".join(f"{E('dot')} {i + 1}. <code>{esc(x)}</code>" for i, x in enumerate(uids.split(",")))
 
 
+def uid_review_lines(registration_id, fallback=""):
+    items = get_registration_uids(registration_id)
+    if not items and fallback:
+        return uid_lines(fallback)
+    return "\n".join(
+        f"{E('dot')} {item['slot']}. <code>{esc(item['uid'])}</code> · {STATUS_ICON.get(item['status'], '⏳')} {sc(item['status'])}"
+        for item in items
+    )
+
+
 def reg_caption(r):
     t = get_tour(r["tournament_id"])
     u = get_user(r["user_id"])
@@ -632,8 +716,8 @@ def reg_caption(r):
         row("group", "Team", esc(r["team_name"])),
         row("user", "User", f"{esc(u['first_name'] if u else '')} ({esc(handle)})"),
         row("id", "ID", f"<code>{r['user_id']}</code>"),
-        row("money", "Fee", f"₹{t['fee'] if t else '?'}"),
-        uid_lines(r["uids"]),
+        row("money", "Fee", fee_label(t['fee']) if t else "?"),
+        uid_review_lines(r["id"], r["uids"]),
         SEP,
         row("time", "Status", sc(STATUS_LABEL.get(r["status"], r["status"]))),
     ]
@@ -683,12 +767,15 @@ def make_qr(data):
 class RegFlow(StatesGroup):
     team = State()
     uids = State()
-    level = State()
     screenshot = State()
 
 
 class ReplyFlow(StatesGroup):
     text = State()
+
+
+class SupportFlow(StatesGroup):
+    message = State()
 
 
 class AddT(StatesGroup):
@@ -705,6 +792,7 @@ class AdminFlow(StatesGroup):
     broadcast = State()
     dm_target = State()
     dm_text = State()
+    support_reply = State()
     reject_reason = State()
     prize = State()
     update = State()
@@ -928,8 +1016,8 @@ async def tournaments(callback: CallbackQuery, state: FSMContext):
     kb = []
     if rows:
         for t in rows:
-            lines.append(f"{E('dot')} <b>{esc(t['title'])}</b> ➛ ₹{t['fee']} | {used_slots(t['id'])}/{t['slots']}")
-            kb.append([btn(f"{t['title']} — ₹{t['fee']}", "trophy", style="primary", callback_data=f"t:{t['id']}")])
+            lines.append(f"{E('dot')} <b>{esc(t['title'])}</b> ➛ {fee_label(t['fee'])} | {used_slots(t['id'])}/{t['slots']}")
+            kb.append([btn(f"{t['title']} — {fee_label(t['fee'])}", "trophy", style="primary", callback_data=f"t:{t['id']}")])
         lines += [SEP, f"{E('bolt')} {sc('Tap a tournament to see details and register.')}"]
     else:
         lines.append(sc("No tournaments are open right now. Check Updates later."))
@@ -946,7 +1034,8 @@ async def tournament_detail(callback: CallbackQuery):
     text = tour_text(t)
     full = used_slots(t["id"]) >= t["slots"]
     if t["status"] == "open" and not full:
-        kb.append([btn("Register & Pay", "pay", style="success", callback_data=f"reg:{t['id']}")])
+        action = "Register Free" if int(t["fee"] or 0) == 0 else "Register & Pay"
+        kb.append([btn(action, "ok" if int(t["fee"] or 0) == 0 else "pay", style="success", callback_data=f"reg:{t['id']}")])
     else:
         text += f"\n{E('warn')} {sc('Registration is closed.' if t['status'] != 'open' else 'All slots are full.')}"
     kb.append([btn("All Tournaments", "trophy", callback_data="tournaments")])
@@ -974,7 +1063,8 @@ async def reg_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RegFlow.team)
     await state.update_data(tid=tid)
     await ask(callback.message.chat.id,
-              f"{E('pin')} {sc('Send your team name (max 30 characters).')}\n{sc('Send /cancel to stop.')}")
+              f"{E('pin')} {sc('Send your team name (max 30 characters).')}\n"
+              f"{sc('Mode')}: {esc(t['mode'])} · {team_size(t['mode'])} {sc('player(s)')}\n{sc('Send /cancel to stop.')}")
     await callback.answer()
 
 
@@ -988,7 +1078,10 @@ async def reg_team(message: Message, state: FSMContext):
     await sweep(chat)
     await state.update_data(team=name)
     await state.set_state(RegFlow.uids)
-    await ask(chat, f"{E('pin')} {sc('Send the 4 player UIDs, one per line (leader first).')}")
+    data = await state.get_data()
+    t = get_tour(data["tid"])
+    required = team_size(t["mode"] if t else "squad")
+    await ask(chat, f"{E('pin')} {sc(f'Send {required} player UID(s), one per line (leader first).')}")
 
 
 @dp.message(RegFlow.uids)
@@ -996,32 +1089,38 @@ async def reg_uids(message: Message, state: FSMContext):
     chat = message.chat.id
     await tidy(message)
     uids = [x.strip() for x in re.split(r"[\n,]+", message.text or "") if x.strip()]
-    if len(uids) != 4 or len(set(uids)) != 4 or not all(re.fullmatch(r"\d{6,14}", x) for x in uids):
-        return await notice(chat, f"{E('warn')} {sc('Send exactly 4 different numeric UIDs, one per line.')}", ttl=7)
-    await sweep(chat)
-    await state.update_data(uids=",".join(uids))
-    await state.set_state(RegFlow.level)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [btn(f"All Players Are Level {MIN_LEVEL}+", "ok", style="success", callback_data="lvl:ok")],
-        [btn("Cancel", "err", style="danger", callback_data="home")]])
-    remember(await bot.send_message(
-        chat, "\n".join([bq(f"{E('warn')} {sc('Level check')}"), "",
-                         f"{sc('Every player must be Level')} <b>{MIN_LEVEL}+</b>.",
-                         sc("Wrong info means disqualification.")]), reply_markup=kb))
-
-
-@dp.callback_query(RegFlow.level, F.data == "lvl:ok")
-async def reg_level(callback: CallbackQuery, state: FSMContext):
-    chat = callback.message.chat.id
     data = await state.get_data()
     t = get_tour(data["tid"])
+    required = team_size(t["mode"] if t else "squad")
+    if len(uids) != required or len(set(uids)) != required or not all(re.fullmatch(r"\d{5,20}", x) for x in uids):
+        return await notice(chat, f"{E('warn')} {sc(f'Send exactly {required} different numeric UID(s), one per line.')}", ttl=7)
     await sweep(chat)
+    uid_text = ",".join(uids)
+    await state.update_data(uids=uid_text)
+    data = await state.get_data()
+    await sweep(chat)
+    if not t or t["status"] != "open":
+        await state.clear()
+        return await notice(chat, f"{E('warn')} {sc('This tournament is no longer open.')}", ttl=8)
+    if int(t["fee"] or 0) == 0:
+        user = message.from_user
+        rid = run("INSERT INTO registrations(user_id, tournament_id, team_name, uids, screenshot_file_id, status, created_at) VALUES (?,?,?,?,NULL,'pending',?)",
+                  (user.id, t["id"], data["team"], data["uids"], now_iso()))
+        sync_registration_uids(rid, data["uids"])
+        r = get_reg(rid)
+        for admin in ADMINS:
+            try:
+                await bot.send_message(admin, reg_caption(r), reply_markup=reg_admin_kb(rid, "pending"))
+            except Exception:
+                logging.exception("could not notify admin %s", admin)
+        await state.clear()
+        return await bot.send_message(chat, f"{E('ok')} {sc('Team submitted for admin approval.')}", reply_markup=back_keyboard())
     await state.set_state(RegFlow.screenshot)
     caption = "\n".join([
-        bq(f"{E('pay')} {sc('Pay')} ₹{t['fee']} ➛ {esc(t['title'])}"),
+        bq(f"{E('pay')} {sc('Pay')} {fee_label(t['fee'])} ➛ {esc(t['title'])}"),
         "",
         row("bank", "UPI ID", f"<code>{esc(UPI_ID)}</code>"),
-        row("money", "Amount", f"₹{t['fee']}"),
+        row("money", "Amount", fee_label(t['fee'])),
         SEP,
         f"1️⃣ {sc('Scan this QR with any UPI app')}",
         f"2️⃣ {sc('Pay the exact amount')}",
@@ -1035,7 +1134,7 @@ async def reg_level(callback: CallbackQuery, state: FSMContext):
     else:
         remember(await bot.send_message(
             chat, caption + f"\n\n{E('warn')} {sc('QR is unavailable, please pay to the UPI ID above.')}"))
-    await callback.answer()
+    await bot.send_message(chat, f"{E('ok')} {sc('UIDs submitted. Admin will manually verify the players.')}")
 
 
 @dp.message(RegFlow.screenshot, F.photo)
@@ -1052,6 +1151,7 @@ async def reg_screenshot(message: Message, state: FSMContext):
     rid = run("INSERT INTO registrations(user_id, tournament_id, team_name, uids, screenshot_file_id, status, created_at) "
               "VALUES (?,?,?,?,?, 'pending', ?)",
               (user.id, t["id"], data["team"], data["uids"], file_id, now_iso()))
+    sync_registration_uids(rid, data["uids"])
     await state.clear()
     try:   # keep a copy of the payment screenshot on the host
         await bot.download(message.photo[-1], destination=SAVE_DIR / f"reg_{rid}.jpg")
@@ -1113,6 +1213,52 @@ async def my_reg_detail(callback: CallbackQuery):
         [btn("Message Admin", "mail", style="primary", callback_data=f"treply:{r['id']}")],
         [btn("My Registrations", "box", callback_data="myregs")]))
     await callback.answer()
+
+
+# ---- general support --------------------------------------------------------
+@dp.callback_query(F.data == "support")
+async def support_start(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await state.set_state(SupportFlow.message)
+    await ask(callback.message.chat.id,
+              f"{E('mail')} {sc('Send your issue or question to admin.')}\n"
+              f"{sc('Text, photo or any file works. Your Telegram name, username and ID are included automatically.')}\n"
+              f"{sc('Send /cancel to stop.')}")
+    await callback.answer()
+
+
+@dp.message(SupportFlow.message)
+async def support_send(message: Message, state: FSMContext):
+    chat = message.chat.id
+    user = message.from_user
+    handle = f"@{user.username}" if user.username else "no username"
+    body = body_of(message)
+    support_id = run("INSERT INTO support_messages(user_id, sender, body, created_at, status) VALUES(?,?,?,?, 'open')",
+                     (user.id, "user", body, now_iso()))
+    header = "\n".join([
+        bq(f"{E('mail')} {sc('New support message')} #{support_id}"),
+        row("user", "Name", esc(user.full_name)),
+        row("user", "Username", esc(handle)),
+        row("id", "Telegram ID", f"<code>{user.id}</code>"),
+        SEP,
+        f"<b>{esc(body)}</b>" if message.text else sc("Media attachment received."),
+    ])
+    delivered = False
+    for admin in ADMINS:
+        delivered = await relay(message, admin, header,
+                                 InlineKeyboardMarkup(inline_keyboard=[
+                                     [btn("Reply To User", "reply", style="primary", callback_data=f"sreply:{support_id}")],
+                                     [btn("Open Support", "mail", callback_data=f"sview:{support_id}")],
+                                 ])) or delivered
+    await state.clear()
+    await sweep(chat)
+    if delivered:
+        await log_channel(f"{E('mail')} Support #{support_id} from {user.id}")
+        await archive_copy(message)
+    await tidy(message)
+    await bot.send_message(chat,
+                           f"{E('ok')} {sc('Your message was sent to admin.') if delivered else sc('Could not reach admin right now.')}",
+                           reply_markup=back_keyboard())
 
 
 # ----------------------------------------------------------------------------
@@ -1245,6 +1391,90 @@ async def team_reply_send(message: Message, state: FSMContext):
                            reply_markup=back_keyboard())
 
 
+# ---- support inbox ----------------------------------------------------------
+@dp.callback_query(F.data == "asupport")
+async def admin_support_list(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    rows = q_all("SELECT * FROM support_messages ORDER BY id DESC LIMIT 25")
+    lines = [bq(f"{E('mail')} {sc('Support inbox')}"), ""]
+    kb = []
+    if not rows:
+        lines.append(sc("No support messages yet."))
+    for item in rows:
+        user = get_user(item["user_id"])
+        label = f"@{user['username']}" if user and user["username"] else (user["first_name"] if user else str(item["user_id"]))
+        lines.append(f"{E('dot')} #{item['id']} · {esc(label)} · {sc(item['status'])}")
+        kb.append([btn(f"#{item['id']} {label[:20]}", "mail", callback_data=f"sview:{item['id']}")])
+    await safe_edit(callback, "\n".join(lines), admin_back(*kb))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("sview:"))
+async def admin_support_view(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    sid = int(callback.data.split(":")[1])
+    item = q_one("SELECT * FROM support_messages WHERE id=?", (sid,))
+    if not item:
+        return await callback.answer("Support message not found.", show_alert=True)
+    user = get_user(item["user_id"])
+    username = f"@{user['username']}" if user and user["username"] else "no username"
+    text = "\n".join([
+        bq(f"{E('mail')} {sc('Support message')} #{sid}"), "",
+        row("user", "Name", esc(user["first_name"] if user else "Unknown")),
+        row("user", "Username", esc(username)),
+        row("id", "Telegram ID", f"<code>{item['user_id']}</code>"),
+        row("time", "Received", esc(item["created_at"])),
+        row("wait", "Status", sc(item["status"])), SEP,
+        f"<b>{esc(item['body'] or 'Media attachment')}</b>",
+    ])
+    await safe_edit(callback, text, admin_back(
+        [btn("Reply To User", "reply", style="primary", callback_data=f"sreply:{sid}")],
+        [btn("Support Inbox", "mail", callback_data="asupport")]))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("sreply:"))
+async def admin_support_reply_start(callback: CallbackQuery, state: FSMContext):
+    if not await admin_only(callback):
+        return
+    sid = int(callback.data.split(":")[1])
+    item = q_one("SELECT * FROM support_messages WHERE id=?", (sid,))
+    if not item:
+        return await callback.answer("Support message not found.", show_alert=True)
+    await state.clear()
+    await state.set_state(AdminFlow.support_reply)
+    await state.update_data(support_id=sid)
+    await ask(callback.message.chat.id, f"{E('reply')} {sc('Send your reply to Telegram ID')} <code>{item['user_id']}</code>.\n{sc('Text, photo or any file works. Send /cancel to stop.')}")
+    await callback.answer()
+
+
+@dp.message(AdminFlow.support_reply)
+async def admin_support_reply_send(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    chat = message.chat.id
+    sid = (await state.get_data()).get("support_id")
+    item = q_one("SELECT * FROM support_messages WHERE id=?", (sid,))
+    if not item:
+        await state.clear()
+        return await notice(chat, f"{E('err')} {sc('Support message not found.')}", ttl=6)
+    delivered = await relay(message, item["user_id"], "\n".join([
+        bq(f"{E('reply')} {sc('Reply from admin')}"), row("mail", "Support Ticket", f"#{sid}"), SEP
+    ]))
+    if delivered:
+        run("INSERT INTO support_messages(user_id, sender, body, created_at, status) VALUES(?,?,?,?, 'replied')",
+            (item["user_id"], "admin", body_of(message), now_iso()))
+        run("UPDATE support_messages SET status='replied' WHERE id=?", (sid,))
+        await log_channel(f"{E('reply')} Admin {message.from_user.id} replied to support #{sid}")
+        await archive_copy(message)
+    await state.clear()
+    await sweep(chat)
+    await tidy(message)
+    await notice(chat, f"{E('ok')} {sc('Reply delivered.') if delivered else sc('Could not deliver the reply.')}", ttl=7)
+
+
 # ----------------------------------------------------------------------------
 # Admin panel
 # ----------------------------------------------------------------------------
@@ -1253,8 +1483,13 @@ def admin_text():
         bq(f"{E('admin')} {sc('Admin panel')}"),
         "",
         row("wait", "Pending Teams", count("SELECT COUNT(*) FROM registrations WHERE status IN ('pending','query')")),
+        row("id", "UIDs Awaiting Review", count("SELECT COUNT(*) FROM registration_uids WHERE status='pending'")),
+        row("mail", "Open Support Messages", count("SELECT COUNT(*) FROM support_messages WHERE status='open'")),
         row("trophy", "Open Tournaments", count("SELECT COUNT(*) FROM tournaments WHERE status='open'")),
         row("group", "Users", count("SELECT COUNT(*) FROM users")),
+        SEP,
+        f"{E('plus')} {sc('Create tournaments with mode-based team sizes, fee, prize, slots, schedule and rules.')}",
+        f"{E('ok')} {sc('Review each player UID individually, then approve the team when all are cleared.')}",
     ])
 
 
@@ -1305,10 +1540,73 @@ async def admin_reg_view(callback: CallbackQuery):
 
 async def _edit_admin_card(callback: CallbackQuery, verdict, rid, status):
     try:
-        await callback.message.edit_caption(
-            caption=f"{callback.message.html_text}\n\n{verdict}", reply_markup=reg_admin_kb(rid, status))
+        markup = reg_admin_kb(rid, status)
+        if getattr(callback.message, "photo", None):
+            await callback.message.edit_caption(
+                caption=f"{callback.message.html_text}\n\n{verdict}", reply_markup=markup)
+        else:
+            await callback.message.edit_text(
+                f"{callback.message.html_text}\n\n{verdict}", reply_markup=markup)
     except TelegramBadRequest:
         pass
+
+
+async def _finish_registration_approval(rid):
+    r = get_reg(rid)
+    if not r:
+        return False
+    t = get_tour(r["tournament_id"])
+    try:
+        await bot.send_message(r["user_id"], "\n".join([
+            bq(f"{E('party')} {sc('Registration approved')}"),
+            head("ok", "You Are In", " ❗️"), "",
+            row("group", "Team", esc(r["team_name"])),
+            row("trophy", "Tournament", esc(t["title"] if t else "?")),
+            row("calendar", "Starts", esc(t["start_time"] if t else "?")), SEP,
+            f"{E('bell')} {sc('Room ID and password will be sent here before the match.')}",
+        ]), reply_markup=back_keyboard([btn("Message Admin", "mail", callback_data=f"treply:{rid}")]))
+        return True
+    except Exception:
+        logging.exception("could not notify registration owner")
+        return False
+
+
+@dp.callback_query(F.data.startswith("uok:"))
+async def uid_approve(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    _, raw_rid, raw_slot = callback.data.split(":")
+    rid, slot = int(raw_rid), int(raw_slot)
+    item = q_one("SELECT * FROM registration_uids WHERE registration_id=? AND slot=?", (rid, slot))
+    r = get_reg(rid)
+    if not item or not r or r["status"] not in ("pending", "query"):
+        return await callback.answer("Already reviewed or not found.", show_alert=True)
+    run("UPDATE registration_uids SET status='approved', reason=NULL, reviewed_at=? WHERE registration_id=? AND slot=?",
+        (now_iso(), rid, slot))
+    remaining = count("SELECT COUNT(*) FROM registration_uids WHERE registration_id=? AND status!='approved'", (rid,))
+    if remaining == 0:
+        run("UPDATE registrations SET status='approved', reason=NULL, reviewed_at=? WHERE id=?", (now_iso(), rid))
+        notified = await _finish_registration_approval(rid)
+        verdict = f"{E('ok')} {sc('All UIDs approved')}" + ("" if notified else f"\n{E('warn')} {sc('User could not be notified.')}")
+        await _edit_admin_card(callback, verdict, rid, "approved")
+    else:
+        await _edit_admin_card(callback, f"{E('ok')} {sc(f'UID {slot} approved')} · {remaining} {sc('remaining')}", rid, r["status"])
+    await callback.answer("UID approved.")
+
+
+@dp.callback_query(F.data.startswith("uno:"))
+async def uid_reject_start(callback: CallbackQuery, state: FSMContext):
+    if not await admin_only(callback):
+        return
+    _, raw_rid, raw_slot = callback.data.split(":")
+    rid, slot = int(raw_rid), int(raw_slot)
+    if not q_one("SELECT id FROM registration_uids WHERE registration_id=? AND slot=?", (rid, slot)):
+        return await callback.answer("UID not found.", show_alert=True)
+    await state.clear()
+    await state.set_state(AdminFlow.reject_reason)
+    await state.update_data(rid=rid, uid_slot=slot)
+    await ask(callback.message.chat.id, f"{E('err')} {sc(f'Send the rejection reason for UID {slot} of registration #{rid} (or send - for none).')}\n{sc('Send /cancel to stop.')}")
+    await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("rok:"))
@@ -1318,26 +1616,13 @@ async def reg_approve(callback: CallbackQuery):
     rid = int(callback.data.split(":")[1])
     done = run("UPDATE registrations SET status='approved', reason=NULL, reviewed_at=? "
                "WHERE id=? AND status IN ('pending','query')", (now_iso(), rid))
+    run("UPDATE registration_uids SET status='approved', reason=NULL, reviewed_at=? WHERE registration_id=?",
+        (now_iso(), rid))
     r = get_reg(rid)
     if not r or r["status"] != "approved":
         return await callback.answer("Already reviewed.", show_alert=True)
     t = get_tour(r["tournament_id"])
-    notified = True
-    try:
-        await bot.send_message(r["user_id"], "\n".join([
-            bq(f"{E('party')} {sc('Registration approved')}"),
-            head("ok", "You Are In", " ❗️"),
-            "",
-            row("group", "Team", esc(r["team_name"])),
-            row("trophy", "Tournament", esc(t["title"])),
-            row("calendar", "Starts", esc(t["start_time"])),
-            SEP,
-            f"{E('bell')} {sc('Room ID and password will be sent here before the match.')}",
-        ]), reply_markup=back_keyboard(
-            [btn("Message Admin", "mail", callback_data=f"treply:{rid}")]))
-    except Exception:
-        notified = False
-        logging.exception("could not notify %s", r["user_id"])
+    notified = await _finish_registration_approval(rid)
     verdict = f"{E('ok')} <b>{sc('Approved')}</b>" + ("" if notified else f"\n{E('warn')} {sc('User could not be notified.')}")
     await _edit_admin_card(callback, verdict, rid, "approved")
     await log_channel(f"{E('ok')} Registration #{rid} APPROVED by {callback.from_user.id}")
@@ -1367,9 +1652,18 @@ async def reg_reject_do(message: Message, state: FSMContext):
         return
     chat = message.chat.id
     rid = (await state.get_data())["rid"]
+    uid_slot = (await state.get_data()).get("uid_slot")
     reason = None if (message.text or "-").strip() == "-" else message.text.strip()
-    run("UPDATE registrations SET status='rejected', reason=?, reviewed_at=? "
-        "WHERE id=? AND status IN ('pending','query')", (reason, now_iso(), rid))
+    if uid_slot:
+        run("UPDATE registration_uids SET status='rejected', reason=?, reviewed_at=? WHERE registration_id=? AND slot=?",
+            (reason, now_iso(), rid, uid_slot))
+        run("UPDATE registrations SET status='rejected', reason=?, reviewed_at=? WHERE id=? AND status IN ('pending','query')",
+            (reason, now_iso(), rid))
+    else:
+        run("UPDATE registrations SET status='rejected', reason=?, reviewed_at=? WHERE id=? AND status IN ('pending','query')",
+            (reason, now_iso(), rid))
+        run("UPDATE registration_uids SET status='rejected', reason=?, reviewed_at=? WHERE registration_id=? AND status='pending'",
+            (reason, now_iso(), rid))
     r = get_reg(rid)
     await state.clear()
     await tidy(message)
@@ -1380,6 +1674,7 @@ async def reg_reject_do(message: Message, state: FSMContext):
             bq(f"{E('err')} {sc('Registration rejected')}"),
             "",
             row("group", "Team", esc(r["team_name"])),
+            *([row("id", "Rejected UID", f"<code>{get_registration_uids(rid)[uid_slot - 1]['uid']}</code>")] if uid_slot and len(get_registration_uids(rid)) >= uid_slot else []),
             *([row("warn", "Reason", esc(reason))] if reason else []),
             SEP,
             sc("You may register again with correct details, or message admin."),
@@ -1420,15 +1715,20 @@ async def add_t_title(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id) or not message.text:
         return
     await _step(message, state, "title", AddT.mode,
-                f"{E('game')} {sc('Step 2/7 · mode? Example: Squad, Duo, Solo, CS')}")
+                f"{E('game')} {sc('Step 2/7 · mode? Send Solo, Duo or Squad.')}")
 
 
 @dp.message(AddT.mode)
 async def add_t_mode(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id) or not message.text:
         return
+    mode = normalize_mode(message.text)
+    if mode not in ("Solo", "Duo", "Squad"):
+        await tidy(message)
+        return await notice(message.chat.id, f"{E('warn')} {sc('Choose exactly Solo, Duo or Squad.')}", ttl=6)
     await _step(message, state, "mode", AddT.time,
-                f"{E('calendar')} {sc('Step 3/7 · date and time? Example: 2 Nov, 8:00 PM')}")
+                f"{E('calendar')} {sc(f'Step 3/7 · schedule for {mode} ({team_size(mode)} player(s) per team). Example: 2 Nov, 8:00 PM')}",
+                value=mode)
 
 
 @dp.message(AddT.time)
@@ -1436,7 +1736,7 @@ async def add_t_time(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id) or not message.text:
         return
     await _step(message, state, "time", AddT.fee,
-                f"{E('pay')} {sc('Step 4/7 · entry fee in ₹? Send a number, or skip for')} ₹{DEFAULT_FEE}")
+                f"{E('pay')} {sc('Step 4/7 · entry fee in ₹? Send a number, or type free for no fee.')}")
 
 
 @dp.message(AddT.fee)
@@ -1444,12 +1744,15 @@ async def add_t_fee(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id) or not message.text:
         return
     txt = message.text.strip().lower()
-    if txt != "skip" and not txt.isdigit():
+    if txt not in ("free", "0") and not txt.isdigit():
         await tidy(message)
-        return await notice(message.chat.id, f"{E('warn')} {sc('Send a number or skip.')}", ttl=5)
+        return await notice(message.chat.id, f"{E('warn')} {sc('Send a positive number, or type free.')}", ttl=5)
+    if txt.isdigit() and int(txt) < 0:
+        await tidy(message)
+        return await notice(message.chat.id, f"{E('warn')} {sc('Fee cannot be negative.')}", ttl=5)
     await _step(message, state, "fee", AddT.slots,
                 f"{E('group')} {sc('Step 5/7 · total team slots? Send a number.')}",
-                value=DEFAULT_FEE if txt == "skip" else int(txt))
+                value=0 if txt in ("free", "0") else int(txt))
 
 
 @dp.message(AddT.slots)
@@ -1461,7 +1764,7 @@ async def add_t_slots(message: Message, state: FSMContext):
         await tidy(message)
         return await notice(message.chat.id, f"{E('warn')} {sc('Send a number.')}", ttl=5)
     await _step(message, state, "slots", AddT.prize,
-                f"{E('star')} {sc('Step 6/7 · prize details? Example: 1st ₹500, 2nd ₹300. Or skip.')}", value=int(txt))
+                f"{E('star')} {sc('Step 6/7 · prize details (required). Example: 1st ₹500, 2nd ₹300.')}", value=int(txt))
 
 
 @dp.message(AddT.prize)
@@ -1469,9 +1772,12 @@ async def add_t_prize(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id) or not message.text:
         return
     txt = message.text.strip()
+    if txt.lower() == "skip":
+        await tidy(message)
+        return await notice(message.chat.id, f"{E('warn')} {sc('Prize is required. Enter the prize pool or placements.')}", ttl=6)
     await _step(message, state, "prize", AddT.rules,
-                f"{E('pin')} {sc('Step 7/7 · extra notes for players? Or skip.')}",
-                value="" if txt.lower() == "skip" else txt)
+                f"{E('pin')} {sc('Step 7/7 · extra rules or notes for players? Or skip.')}",
+                value=txt)
 
 
 @dp.message(AddT.rules)
