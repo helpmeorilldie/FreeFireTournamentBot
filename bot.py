@@ -28,8 +28,10 @@ from dotenv import load_dotenv
 from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ParseMode
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandStart
+from aiogram.exceptions import (
+    TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter, TelegramServerError,
+)
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -40,6 +42,11 @@ try:
     import qrcode  # pip install "qrcode[pil]"
 except ImportError:
     qrcode = None
+
+try:
+    from PIL import Image, ImageDraw, ImageFont   # installed together with qrcode[pil]
+except ImportError:
+    Image = ImageDraw = ImageFont = None
 
 
 # Keep diagnostics enabled for bot operations.
@@ -139,6 +146,7 @@ EMOJI = {
     "radio": "🔘", "host": "🏛️", "earth": "🌍", "wait": "⏳", "cat": "🐈‍⬛",
     "trophy": "🏆", "game": "🎮", "reply": "↩️", "backup": "💾", "restore": "♻️",
     "csv": "📄", "info": "ℹ️", "plus": "➕", "list": "📋",
+    "medal": "🏅", "history": "🗂️", "cert": "🎓", "crown": "👑",
 }
 EMOJI_IDS = {}
 if USE_CUSTOM_EMOJI:
@@ -161,9 +169,14 @@ if USE_CUSTOM_EMOJI:
     })
 
 
+# These two flags are set by setup_emoji() at start-up after really testing Telegram.
+MSG_EMOJI_OK = True    # premium emoji inside message text
+BTN_ICON_OK = True     # premium emoji icons on inline buttons
+
+
 def E(name):
     fallback = EMOJI.get(name, "•")
-    cid = EMOJI_IDS.get(name)
+    cid = EMOJI_IDS.get(name) if MSG_EMOJI_OK else None
     return f'<tg-emoji emoji-id="{cid}">{fallback}</tg-emoji>' if cid else fallback
 
 
@@ -177,7 +190,7 @@ def btn(text, emoji=None, style=None, **kw):
     style: 'primary' (blue) / 'success' (green) / 'danger' (red)."""
     label = sc(text)
     extra = {}
-    cid = EMOJI_IDS.get(emoji) if emoji else None
+    cid = EMOJI_IDS.get(emoji) if (emoji and BTN_ICON_OK) else None
     if cid and HAS_ICON:
         extra["icon_custom_emoji_id"] = cid
     elif emoji:
@@ -370,7 +383,20 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_reg_user ON registrations(user_id, status);
         CREATE INDEX IF NOT EXISTS idx_reg_tour ON registrations(tournament_id, status);
+        CREATE TABLE IF NOT EXISTS results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tournament_id INTEGER NOT NULL, reg_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL, team_name TEXT NOT NULL, placement INTEGER NOT NULL,
+            kills INTEGER NOT NULL DEFAULT 0, points INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+            UNIQUE(tournament_id, reg_id)
+        );
         """)
+        # light migrations for databases created by older versions
+        for ddl in ("ALTER TABLE registrations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+                    "ALTER TABLE tournaments ADD COLUMN completed_at TEXT"):
+            try:
+                con.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
 
 
 def now_iso():
@@ -512,7 +538,8 @@ def home_keyboard(admin=False):
          btn("Updates", "bell", callback_data="updates")],
         [btn("How To Register", "pin", callback_data="howto"),
          btn("Rules", "lock", callback_data="rules")],
-        [btn("Developer & Host", "dev", callback_data="about")],
+        [btn("Leaderboard", "medal", style="success", callback_data="lb"),
+         btn("Developer & Host", "dev", callback_data="about")],
     ]
     if admin:
         rows.append([btn("Admin Panel", "admin", callback_data="admin")])
@@ -539,7 +566,8 @@ def admin_keyboard():
          btn("Post Update", "bell", callback_data="aupd")],
         [btn("Broadcast", "channel", callback_data="abc"),
          btn("Message A Team", "mail", callback_data="amsg")],
-        [btn("Support Inbox", "mail", style="primary", callback_data="asupport")],
+        [btn("Support Inbox", "mail", style="primary", callback_data="asupport"),
+         btn("History", "history", callback_data="ahist")],
         [btn("Statistics", "stats", callback_data="astats"),
          btn("Users", "user", callback_data="ausers")],
         [btn("Export CSV", "csv", callback_data="acsv"),
@@ -797,6 +825,7 @@ class AdminFlow(StatesGroup):
     prize = State()
     update = State()
     restore = State()
+    results = State()
 
 
 async def admin_only(callback: CallbackQuery):
@@ -1209,9 +1238,14 @@ async def my_reg_detail(callback: CallbackQuery):
     r = get_reg(int(callback.data.split(":")[1]))
     if not r or r["user_id"] != callback.from_user.id:
         return await callback.answer("Not found.", show_alert=True)
-    await safe_edit(callback, myreg_text(r), back_keyboard(
-        [btn("Message Admin", "mail", style="primary", callback_data=f"treply:{r['id']}")],
-        [btn("My Registrations", "box", callback_data="myregs")]))
+    text = myreg_text(r)
+    rows = [[btn("Message Admin", "mail", style="primary", callback_data=f"treply:{r['id']}")]]
+    res = q_one("SELECT * FROM results WHERE reg_id=?", (r["id"],))
+    if res:
+        text += "\n" + row("medal", "Result", f"#{res['placement']} · {res['points']} {sc('pts')} · {res['kills']} {sc('kills')}")
+        rows.append([btn("Get Certificate", "cert", style="success", callback_data=f"mycert:{r['id']}")])
+    rows.append([btn("My Registrations", "box", callback_data="myregs")])
+    await safe_edit(callback, text, back_keyboard(*rows))
     await callback.answer()
 
 
@@ -1482,8 +1516,8 @@ def admin_text():
     return "\n".join([
         bq(f"{E('admin')} {sc('Admin panel')}"),
         "",
-        row("wait", "Pending Teams", count("SELECT COUNT(*) FROM registrations WHERE status IN ('pending','query')")),
-        row("id", "UIDs Awaiting Review", count("SELECT COUNT(*) FROM registration_uids WHERE status='pending'")),
+        row("wait", "Pending Teams", count("SELECT COUNT(*) FROM registrations WHERE archived=0 AND status IN ('pending','query')")),
+        row("id", "UIDs Awaiting Review", count("SELECT COUNT(*) FROM registration_uids u JOIN registrations r ON r.id=u.registration_id WHERE u.status='pending' AND r.archived=0")),
         row("mail", "Open Support Messages", count("SELECT COUNT(*) FROM support_messages WHERE status='open'")),
         row("trophy", "Open Tournaments", count("SELECT COUNT(*) FROM tournaments WHERE status='open'")),
         row("group", "Users", count("SELECT COUNT(*) FROM users")),
@@ -1508,7 +1542,7 @@ async def admin_list(callback: CallbackQuery):
     if not await admin_only(callback):
         return
     mode = callback.data.split(":")[1]
-    where = "WHERE status IN ('pending','query') " if mode == "pending" else ""
+    where = "WHERE archived=0 AND status IN ('pending','query') " if mode == "pending" else "WHERE archived=0 "
     rows = q_all(f"SELECT * FROM registrations {where}ORDER BY id DESC LIMIT 25")
     lines = [bq(f"{E('list')} {sc('Pending teams' if mode == 'pending' else 'Latest registrations')}"), ""]
     kb = []
@@ -1805,7 +1839,7 @@ async def add_t_rules(message: Message, state: FSMContext):
 async def admin_tours(callback: CallbackQuery):
     if not await admin_only(callback):
         return
-    rows = q_all("SELECT * FROM tournaments ORDER BY id DESC LIMIT 15")
+    rows = q_all("SELECT * FROM tournaments WHERE status IN ('open','closed') ORDER BY id DESC LIMIT 15")
     lines = [bq(f"{E('trophy')} {sc('Manage tournaments')}"), ""]
     kb = []
     if not rows:
@@ -1822,8 +1856,11 @@ def tm_keyboard(t):
         [btn("Announce To All", "channel", style="primary", callback_data=f"tann:{t['id']}"),
          btn("Set Prize", "star", callback_data=f"tprize:{t['id']}")],
         [btn("Message Approved Teams", "mail", callback_data=f"tmsg:{t['id']}")],
+        [btn("Set Results", "medal", style="success", callback_data=f"tres:{t['id']}"),
+         btn("Leaderboard", "crown", callback_data=f"lbt:{t['id']}")],
         [btn("Close" if t["status"] == "open" else "Reopen", "lock", callback_data=f"ttog:{t['id']}"),
-         btn("Delete", "trash", style="danger", callback_data=f"tdel:{t['id']}")],
+         btn("Complete", "party", style="primary", callback_data=f"tcomp:{t['id']}")],
+        [btn("Delete", "trash", style="danger", callback_data=f"tdel:{t['id']}")],
         [btn("All Tournaments", "trophy", callback_data="atours")])
 
 
@@ -1857,7 +1894,7 @@ async def tour_delete_ask(callback: CallbackQuery):
     n = count("SELECT COUNT(*) FROM registrations WHERE tournament_id=?", (tid,))
     await safe_edit(callback, "\n".join([
         bq(f"{E('trash')} {sc('Delete tournament')} #{tid}"), "",
-        f"{E('warn')} {sc('This also hides its')} {n} {sc('registrations from lists. Continue?')}"]),
+        f"{E('warn')} {sc('Its')} {n} {sc('registrations move to History and the tournament is removed. Continue?')}"]),
         admin_back([btn("Yes, Delete", "trash", style="danger", callback_data=f"tdelok:{tid}")],
                    [btn("Cancel", "err", callback_data=f"tm:{tid}")]))
     await callback.answer()
@@ -1868,8 +1905,9 @@ async def tour_delete(callback: CallbackQuery):
     if not await admin_only(callback):
         return
     tid = int(callback.data.split(":")[1])
-    run("DELETE FROM tournaments WHERE id=?", (tid,))
-    await safe_edit(callback, f"{E('ok')} {sc('Tournament deleted.')}", admin_back())
+    await archive_tournament(tid, "deleted")
+    await safe_edit(callback, f"{E('ok')} {sc('Tournament deleted. Its registrations are saved in History.')}",
+                    admin_back([btn("History", "history", callback_data="ahist")]))
     await callback.answer()
 
 
@@ -1877,7 +1915,7 @@ async def tour_delete(callback: CallbackQuery):
 async def prize_pick(callback: CallbackQuery):
     if not await admin_only(callback):
         return
-    rows = q_all("SELECT * FROM tournaments ORDER BY id DESC LIMIT 15")
+    rows = q_all("SELECT * FROM tournaments WHERE status IN ('open','closed') ORDER BY id DESC LIMIT 15")
     kb = [[btn(f"#{t['id']} {t['title'][:24]}", "star", callback_data=f"tprize:{t['id']}")] for t in rows]
     text = "\n".join([bq(f"{E('star')} {sc('Set prize')}"), "",
                       sc("Choose a tournament:") if rows else sc("No tournaments yet.")])
@@ -2017,6 +2055,354 @@ async def update_save(message: Message, state: FSMContext):
     await run_broadcast(chat, all_user_ids(), "update", text=text)
 
 
+# ---- results, leaderboard, certificates, history ---------------------------------
+PLACE_POINTS = {1: 12, 2: 9, 3: 8, 4: 7, 5: 6, 6: 5, 7: 4, 8: 3, 9: 2, 10: 1}   # + 1 point per kill
+MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+
+def calc_points(placement, kills):
+    return PLACE_POINTS.get(placement, 0) + kills
+
+
+def tour_results(tid):
+    return q_all("SELECT * FROM results WHERE tournament_id=? ORDER BY points DESC, kills DESC, placement ASC", (tid,))
+
+
+def leaderboard_text(t):
+    rows = tour_results(t["id"])
+    lines = [bq(f"{E('medal')} {sc('Leaderboard')} #{t['id']}"), f"{E('trophy')} <b>{esc(t['title'])}</b>", ""]
+    if not rows:
+        lines.append(sc("Results are not published yet."))
+    for i, r in enumerate(rows[:15], 1):
+        lines.append(f"{MEDALS.get(i, f'{i}.')} <b>{esc(r['team_name'])}</b> ➛ {r['points']} {sc('pts')} · "
+                     f"{r['kills']} {sc('kills')} · {sc('Rank')} #{r['placement']}")
+    lines += [SEP, sc("Points = placement points + 1 per kill")]
+    return "\n".join(lines)
+
+
+async def archive_tournament(tid, outcome):
+    """Move a tournament and all of its registrations out of the live admin lists into History."""
+    run("UPDATE tournaments SET status=?, completed_at=? WHERE id=?", (outcome, now_iso(), tid))
+    run("UPDATE registrations SET archived=1 WHERE tournament_id=?", (tid,))
+    await log_channel(f"{E('history')} Tournament #{tid} archived as {esc(outcome)}")
+    spawn(backup_now("archive"))
+
+
+# ---- public leaderboard -----------------------------------------------------------
+@dp.callback_query(F.data == "lb")
+async def lb_menu(callback: CallbackQuery):
+    rows = q_all("SELECT DISTINCT t.* FROM tournaments t JOIN results r ON r.tournament_id=t.id "
+                 "WHERE t.status!='deleted' ORDER BY t.id DESC LIMIT 10")
+    lines = [bq(f"{E('medal')} {sc('Leaderboards')}"), ""]
+    kb = [[btn("Overall Top Teams", "crown", style="primary", callback_data="lbo")]]
+    if rows:
+        lines.append(sc("Pick a tournament or see the overall ranking."))
+        for t in rows:
+            kb.append([btn(t["title"][:30], "trophy", callback_data=f"lbt:{t['id']}")])
+    else:
+        lines.append(sc("No results published yet."))
+    await safe_edit(callback, "\n".join(lines), back_keyboard(*kb))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("lbt:"))
+async def lb_tournament(callback: CallbackQuery):
+    t = get_tour(int(callback.data.split(":")[1]))
+    if not t:
+        return await callback.answer("Not found.", show_alert=True)
+    await safe_edit(callback, leaderboard_text(t),
+                    back_keyboard([btn("All Leaderboards", "medal", callback_data="lb")]))
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "lbo")
+async def lb_overall(callback: CallbackQuery):
+    rows = q_all("SELECT MIN(r.team_name) AS team, SUM(r.points) AS p, SUM(r.kills) AS k, COUNT(*) AS m, "
+                 "SUM(r.placement=1) AS w FROM results r JOIN tournaments t ON t.id=r.tournament_id "
+                 "WHERE t.status!='deleted' GROUP BY lower(r.team_name) ORDER BY p DESC, k DESC LIMIT 15")
+    lines = [bq(f"{E('crown')} {sc('Overall top teams')}"), ""]
+    if not rows:
+        lines.append(sc("No results published yet."))
+    for i, r in enumerate(rows, 1):
+        lines.append(f"{MEDALS.get(i, f'{i}.')} <b>{esc(r['team'])}</b> ➛ {r['p']} {sc('pts')} · "
+                     f"{r['k']} {sc('kills')} · {r['m']} {sc('matches')} · {r['w']} {sc('wins')}")
+    await safe_edit(callback, "\n".join(lines),
+                    back_keyboard([btn("All Leaderboards", "medal", callback_data="lb")]))
+    await callback.answer()
+
+
+# ---- admin: enter results ---------------------------------------------------------
+@dp.callback_query(F.data.startswith("tres:"))
+async def results_start(callback: CallbackQuery, state: FSMContext):
+    if not await admin_only(callback):
+        return
+    tid = int(callback.data.split(":")[1])
+    teams = q_all("SELECT id, team_name FROM registrations WHERE tournament_id=? AND status='approved' ORDER BY id", (tid,))
+    if not teams:
+        return await callback.answer("No approved teams in this tournament.", show_alert=True)
+    await state.clear()
+    await state.set_state(AdminFlow.results)
+    await state.update_data(tid=tid)
+    listing = "\n".join(f"{E('dot')} #{x['id']} {esc(x['team_name'])}" for x in teams)
+    await ask(callback.message.chat.id,
+              f"{E('medal')} {sc('Send results, one team per line:')}\n"
+              f"<code>reg_id placement kills</code>\n{sc('Example')}: <code>12 1 9</code>\n\n{listing}\n\n"
+              f"{sc('Points = placement points (12,9,8,7,6,5,4,3,2,1) + kills.')}\n"
+              f"{sc('Sending again replaces old results. Send /cancel to stop.')}")
+    await callback.answer()
+
+
+@dp.message(AdminFlow.results)
+async def results_save(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id) or not message.text:
+        return
+    chat = message.chat.id
+    tid = (await state.get_data())["tid"]
+    await tidy(message)
+    valid = {r["id"]: r for r in q_all(
+        "SELECT * FROM registrations WHERE tournament_id=? AND status='approved'", (tid,))}
+    parsed, bad, seen = [], [], set()
+    for line in message.text.splitlines():
+        if not line.strip():
+            continue
+        nums = re.findall(r"\d+", line)
+        if len(nums) != 3 or int(nums[0]) not in valid or int(nums[0]) in seen or int(nums[1]) < 1:
+            bad.append(line.strip()[:40])
+            continue
+        seen.add(int(nums[0]))
+        parsed.append((int(nums[0]), int(nums[1]), int(nums[2])))
+    if bad or not parsed:
+        return await notice(chat, f"{E('warn')} {sc('Fix these lines and send again:')}\n" +
+                            "\n".join(f"<code>{esc(b)}</code>" for b in bad or ["empty"]), ttl=12)
+    run("DELETE FROM results WHERE tournament_id=?", (tid,))
+    for rid, place, kills in parsed:
+        reg = valid[rid]
+        run("INSERT INTO results(tournament_id, reg_id, user_id, team_name, placement, kills, points, created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (tid, rid, reg["user_id"], reg["team_name"], place, kills, calc_points(place, kills), now_iso()))
+    await state.clear()
+    await sweep(chat)
+    t = get_tour(tid)
+    await log_channel(f"{E('medal')} Results saved for tournament #{tid} by {message.from_user.id}")
+    await bot.send_message(chat, leaderboard_text(t) + f"\n{E('ok')} {sc('Results saved.')}", reply_markup=admin_back(
+        [btn("Announce Leaderboard", "channel", style="primary", callback_data=f"tlbann:{tid}")],
+        [btn("Send Certificates", "cert", style="success", callback_data=f"tcert:{tid}")],
+        [btn("Complete & Archive", "party", callback_data=f"tcomp:{tid}")]))
+
+
+@dp.callback_query(F.data.startswith("tlbann:"))
+async def leaderboard_announce(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    t = get_tour(int(callback.data.split(":")[1]))
+    if not t or not tour_results(t["id"]):
+        return await callback.answer("Save results first.", show_alert=True)
+    await callback.answer("Sending...")
+    await run_broadcast(callback.message.chat.id, all_user_ids(), f"leaderboard #{t['id']}", text=leaderboard_text(t))
+
+
+# ---- certificate generator (pure Python / Pillow) -------------------------------------
+def _font(size, bold=False):
+    names = (["DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "arialbd.ttf"] if bold
+             else ["DejaVuSans.ttf", "LiberationSans-Regular.ttf", "arial.ttf"])
+    for name in names:
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            pass
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _ordinal(n):
+    suffixes = {1: "st", 2: "nd", 3: "rd"}
+    suffix = "th" if 10 <= n % 100 <= 20 else suffixes.get(n % 10, "th")
+    return str(n) + suffix
+
+
+def make_certificate(team, title, placement, points, kills, uids, host_date):
+    """Draw a certificate PNG. Returns BufferedInputFile, or None when Pillow is missing."""
+    if Image is None:
+        return None
+    W, H = 1600, 1130
+    img = Image.new("RGB", (W, H))
+    d = ImageDraw.Draw(img)
+    for y in range(H):                                   # dark vertical gradient
+        k = y / H
+        d.line([(0, y), (W, y)], fill=(int(12 + 18 * k), int(12 + 10 * k), int(26 + 34 * k)))
+    gold, light, grey = (212, 175, 55), (245, 230, 170), (170, 170, 190)
+    d.rectangle([30, 30, W - 30, H - 30], outline=gold, width=8)
+    d.rectangle([55, 55, W - 55, H - 55], outline=gold, width=2)
+    for cx, cy in ((55, 55), (W - 55, 55), (55, H - 55), (W - 55, H - 55)):
+        d.polygon([(cx, cy - 24), (cx + 24, cy), (cx, cy + 24), (cx - 24, cy)], fill=gold)
+
+    def center(text, y, font, fill):
+        w = d.textlength(text, font=font)
+        d.text(((W - w) / 2, y), text, font=font, fill=fill)
+
+    def fit(text, start, bold, max_w):
+        size = start
+        while size > 24 and d.textlength(text, font=_font(size, bold)) > max_w:
+            size -= 4
+        return _font(size, bold)
+
+    d.ellipse([W / 2 - 80, 95, W / 2 + 80, 255], fill=gold, outline=light, width=6)
+    num = str(placement)
+    nf = _font(90, True)
+    d.text((W / 2 - d.textlength(num, font=nf) / 2, 118), num, font=nf, fill=(20, 20, 30))
+
+    if placement == 1:
+        heading = "CERTIFICATE OF VICTORY"
+    elif placement <= 3:
+        heading = "CERTIFICATE OF ACHIEVEMENT"
+    else:
+        heading = "CERTIFICATE OF PARTICIPATION"
+    center(heading, 290, _font(74, True), gold)
+    center("THIS CERTIFICATE IS PROUDLY PRESENTED TO", 400, _font(30), light)
+    center(team, 455, fit(team, 120, True, W - 300), (255, 255, 255))
+    d.line([(300, 610), (W - 300, 610)], fill=gold, width=3)
+    center(f"for securing {_ordinal(placement)} place in", 645, _font(38), light)
+    center(title, 705, fit(title, 64, True, W - 300), gold)
+    center(f"{points} Points   |   {kills} Kills", 800, _font(36, True), (255, 255, 255))
+    if uids:
+        center("Players: " + ", ".join(uids), 865, fit("Players: " + ", ".join(uids), 26, False, W - 300), grey)
+    center("Hosted By Erebus  |  Organizer: Haze @Noxmirage", H - 190, _font(30, True), light)
+    center(host_date, H - 140, _font(26), grey)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return BufferedInputFile(buf.getvalue(), filename=f"certificate_{team[:20].replace(' ', '_')}.png")
+
+
+async def build_certificate(res):
+    t = get_tour(res["tournament_id"])
+    reg = get_reg(res["reg_id"])
+    uids = [x.strip() for x in (reg["uids"] if reg else "").split(",") if x.strip()]
+    date_text = (t["completed_at"] or t["start_time"] or now_iso())[:10] if t else now_iso()[:10]
+    return await asyncio.to_thread(make_certificate, res["team_name"], t["title"] if t else "Tournament",
+                                   res["placement"], res["points"], res["kills"], uids, date_text)
+
+
+@dp.callback_query(F.data.startswith("mycert:"))
+async def my_certificate(callback: CallbackQuery):
+    rid = int(callback.data.split(":")[1])
+    res = q_one("SELECT * FROM results WHERE reg_id=?", (rid,))
+    if not res or res["user_id"] != callback.from_user.id:
+        return await callback.answer("No certificate yet.", show_alert=True)
+    await callback.answer("Creating certificate...")
+    cert = await build_certificate(res)
+    if not cert:
+        return await callback.answer("Certificate generator is unavailable.", show_alert=True)
+    await bot.send_document(callback.message.chat.id, cert, caption=f"{E('cert')} {sc('Your certificate')}")
+
+
+@dp.callback_query(F.data.startswith("tcert:"))
+async def send_certificates(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    tid = int(callback.data.split(":")[1])
+    rows = tour_results(tid)
+    if not rows:
+        return await callback.answer("Save results first.", show_alert=True)
+    if Image is None:
+        return await callback.answer("Install Pillow: pip install pillow", show_alert=True)
+    await callback.answer("Sending certificates...")
+    status = await bot.send_message(callback.message.chat.id, f"{E('spin')} {sc('Creating')} {len(rows)} {sc('certificates...')}")
+    sent = failed = 0
+    for res in rows:
+        try:
+            cert = await build_certificate(res)
+            await bot.send_document(res["user_id"], cert, caption=f"{E('cert')} {sc('Your certificate')} ➛ {esc(res['team_name'])}")
+            sent += 1
+        except Exception:
+            failed += 1
+            logging.exception("certificate for result %s failed", res["id"])
+        await asyncio.sleep(0.05)
+    await status.edit_text("\n".join([head("cert", "Certificates Sent", " ❗️"), "",
+                                      row("ok", "Delivered", sent), row("err", "Failed", failed)]))
+    spawn(_delete_later(status.chat.id, status.message_id, 60))
+
+
+# ---- complete a tournament ------------------------------------------------------------
+@dp.callback_query(F.data.startswith("tcomp:"))
+async def complete_ask(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    tid = int(callback.data.split(":")[1])
+    n = count("SELECT COUNT(*) FROM registrations WHERE tournament_id=?", (tid,))
+    await safe_edit(callback, "\n".join([
+        bq(f"{E('party')} {sc('Complete tournament')} #{tid}"), "",
+        f"{E('warn')} {sc('Its')} {n} {sc('registrations move to History and users can no longer register. Continue?')}"]),
+        admin_back([btn("Yes, Complete", "party", style="success", callback_data=f"tcompok:{tid}")],
+                   [btn("Cancel", "err", callback_data=f"tm:{tid}")]))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("tcompok:"))
+async def complete_do(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    tid = int(callback.data.split(":")[1])
+    await archive_tournament(tid, "completed")
+    await safe_edit(callback, f"{E('ok')} {sc('Tournament completed. Registrations are saved in History.')}",
+                    admin_back([btn("History", "history", callback_data="ahist")]))
+    await callback.answer("Completed.")
+
+
+# ---- history --------------------------------------------------------------------------
+@dp.callback_query(F.data == "ahist")
+async def history_list(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    rows = q_all("SELECT * FROM tournaments WHERE status IN ('completed','deleted') ORDER BY id DESC LIMIT 20")
+    lines = [bq(f"{E('history')} {sc('Tournament history')}"), ""]
+    kb = []
+    if not rows:
+        lines.append(sc("Nothing archived yet."))
+    for t in rows:
+        n = count("SELECT COUNT(*) FROM registrations WHERE tournament_id=?", (t["id"],))
+        icon = "✅" if t["status"] == "completed" else "🗑"
+        lines.append(f"{icon} #{t['id']} <b>{esc(t['title'])}</b> ➛ {n} {sc('teams')}")
+        kb.append([btn(f"#{t['id']} {t['title'][:20]} · {t['status']}", "history", callback_data=f"ahv:{t['id']}")])
+    await safe_edit(callback, "\n".join(lines), admin_back(*kb))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("ahv:"))
+async def history_view(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    tid = int(callback.data.split(":")[1])
+    t = get_tour(tid)
+    if not t:
+        return await callback.answer("Not found.", show_alert=True)
+    regs = q_all("SELECT r.*, res.points, res.placement FROM registrations r "
+                 "LEFT JOIN results res ON res.reg_id=r.id WHERE r.tournament_id=? ORDER BY r.id", (tid,))
+    lines = [tour_text(t), SEP, f"{E('history')} <b>{sc('Archived registrations')}</b> ({len(regs)})"]
+    for r in regs[:30]:
+        extra = f" · #{r['placement']} · {r['points']} {sc('pts')}" if r["points"] is not None else ""
+        lines.append(f"{STATUS_ICON.get(r['status'], '⏳')} #{r['id']} {esc(r['team_name'])}{extra}")
+    if len(regs) > 30:
+        lines.append(f"… +{len(regs) - 30} {sc('more, export CSV to see all')}")
+    await safe_edit(callback, "\n".join(lines), admin_back(
+        [btn("Leaderboard", "crown", callback_data=f"lbt:{tid}"),
+         btn("Export CSV", "csv", callback_data=f"ahcsv:{tid}")],
+        [btn("Edit Results", "medal", callback_data=f"tres:{tid}"),
+         btn("Send Certificates", "cert", style="success", callback_data=f"tcert:{tid}")],
+        [btn("History", "history", callback_data="ahist")]))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("ahcsv:"))
+async def history_csv(callback: CallbackQuery):
+    if not await admin_only(callback):
+        return
+    tid = int(callback.data.split(":")[1])
+    await bot.send_document(callback.message.chat.id, make_csv(tid), caption=f"{E('csv')} {sc('Archived registrations')} #{tid}")
+    await callback.answer()
+
+
 # ---- stats / users / csv / backup / restore --------------------------------------
 @dp.callback_query(F.data == "astats")
 async def admin_stats(callback: CallbackQuery):
@@ -2050,11 +2436,11 @@ async def admin_users(callback: CallbackQuery):
     await callback.answer()
 
 
-def make_csv():
+def make_csv(tid=None):
     rows = q_all("""SELECT r.id, t.title AS tournament, r.team_name, r.uids, r.user_id, u.username, r.status,
                     r.reason, r.created_at, r.reviewed_at FROM registrations r
                     LEFT JOIN tournaments t ON t.id=r.tournament_id LEFT JOIN users u ON u.user_id=r.user_id
-                    ORDER BY r.id""")
+                    WHERE (? IS NULL OR r.tournament_id=?) ORDER BY r.id""", (tid, tid))
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["id", "tournament", "team_name", "uids", "user_id", "username", "status", "reason", "created_at", "reviewed_at"])
@@ -2124,15 +2510,121 @@ async def admin_restore_do(message: Message, state: FSMContext):
 
 
 # ----------------------------------------------------------------------------
+# Premium emoji: real start-up test + helper to read emoji IDs
+# ----------------------------------------------------------------------------
+async def setup_emoji():
+    """Checks every custom emoji ID with Telegram and tests whether this bot is really allowed to
+    show premium emoji in message text and on buttons. Anything that does not work is switched
+    off cleanly (normal emoji are used), so you never see broken or empty icons."""
+    global MSG_EMOJI_OK, BTN_ICON_OK
+    notes = []
+    if not EMOJI_IDS:
+        MSG_EMOJI_OK = BTN_ICON_OK = False
+        return "Premium emoji: disabled (USE_CUSTOM_EMOJI=0)"
+    ids = sorted(set(EMOJI_IDS.values()))
+    try:
+        valid = set()
+        for i in range(0, len(ids), 200):
+            for s in await bot.get_custom_emoji_stickers(ids[i:i + 200]):
+                valid.add(s.custom_emoji_id)
+        for name in [n for n, c in EMOJI_IDS.items() if c not in valid]:
+            EMOJI_IDS.pop(name)
+            notes.append(f"invalid ID removed: {name}")
+    except Exception as e:
+        notes.append(f"ID check failed: {e}")
+    if not EMOJI_IDS:
+        MSG_EMOJI_OK = BTN_ICON_OK = False
+        return "Premium emoji: no valid IDs left\n" + "\n".join(notes)
+    name, cid = next(iter(EMOJI_IDS.items()))
+    MSG_EMOJI_OK = BTN_ICON_OK = False
+    try:
+        m = await bot.send_message(OWNER_ID, f'<tg-emoji emoji-id="{cid}">{EMOJI.get(name, "•")}</tg-emoji>')
+        MSG_EMOJI_OK = any(e.type == "custom_emoji" for e in (m.entities or []))
+        await _delete(OWNER_ID, m.message_id)
+    except Exception as e:
+        notes.append(f"message test failed: {e}")
+    if HAS_ICON:
+        try:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="test", icon_custom_emoji_id=cid)]])
+            m = await bot.send_message(OWNER_ID, "test", reply_markup=kb)
+            BTN_ICON_OK = True
+            await _delete(OWNER_ID, m.message_id)
+        except Exception as e:
+            notes.append(f"button test failed: {e}")
+    else:
+        notes.append("buttons: upgrade aiogram to >= 3.25")
+    report = [f"Premium emoji in messages: {'ON' if MSG_EMOJI_OK else 'OFF'}",
+              f"Premium emoji on buttons: {'ON' if BTN_ICON_OK else 'OFF'}"] + notes
+    if not MSG_EMOJI_OK:
+        report.append("Telegram only lets a bot show premium emoji in message text if it owns a Fragment username; "
+                      "normal emoji are used instead.")
+    if not BTN_ICON_OK:
+        report.append("Button icons need the bot owner to have Telegram Premium.")
+    return "\n".join(report)
+
+
+def _emoji_ids_in(message: Message):
+    ents = (message.entities or []) + (message.caption_entities or [])
+    return [e.custom_emoji_id for e in ents if e.type == "custom_emoji"]
+
+
+def _is_emoji_probe(message: Message):
+    return bool(message.from_user and is_admin(message.from_user.id)
+                and (message.sticker is not None or _emoji_ids_in(message)))
+
+
+@dp.message(StateFilter(None), F.func(_is_emoji_probe))
+async def emoji_id_helper(message: Message):
+    """Admin: send any premium emoji or sticker to the bot and get its ID back."""
+    lines = [bq(f"{E('info')} {sc('Emoji / sticker IDs')}"), ""]
+    for cid in dict.fromkeys(_emoji_ids_in(message)):
+        lines.append(f"{E('dot')} {sc('Emoji ID')}: <code>{cid}</code>")
+    if message.sticker:
+        s = message.sticker
+        if s.custom_emoji_id:
+            lines.append(f"{E('dot')} {sc('Emoji ID')}: <code>{s.custom_emoji_id}</code>")
+        lines.append(f"{E('dot')} {sc('Sticker file_id')}: <code>{esc(s.file_id)}</code>")
+    lines += [SEP, sc("Paste the Emoji ID into EMOJI_IDS in the code.")]
+    await message.reply("\n".join(lines))
+
+
+# ----------------------------------------------------------------------------
 # Run
 # ----------------------------------------------------------------------------
+async def with_retry(factory, what, tries=8):
+    """Telegram sometimes answers 502/503/timeouts for a few seconds. Retry instead of crashing."""
+    delay = 2
+    for attempt in range(1, tries + 1):
+        try:
+            return await factory()
+        except (TelegramServerError, TelegramNetworkError, TelegramRetryAfter, asyncio.TimeoutError) as e:
+            wait = getattr(e, "retry_after", delay)
+            print(f"[startup] {what} failed ({type(e).__name__}: {e}); retry {attempt}/{tries} in {wait}s")
+            await asyncio.sleep(wait)
+            delay = min(delay * 2, 60)
+    return await factory()          # last try, let the error show
+
+
 async def main():
     init_db()
     spawn(backup_loop())
-    await bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Bot running - Hosted By Erebus")
+    await with_retry(lambda: bot.delete_webhook(drop_pending_updates=True), "delete_webhook")
+    try:
+        report = await setup_emoji()
+        print(report)
+        await notice(OWNER_ID, f"{E('info')} <code>{esc(report)}</code>", ttl=60)
+    except Exception as e:                      # emoji check must never stop the bot
+        print(f"[startup] emoji check skipped: {e}")
+    print("Bot running - Hosted By Erebus")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # If Telegram has a longer outage, restart the bot by itself instead of dying.
+    while True:
+        try:
+            asyncio.run(main())
+            break
+        except (TelegramServerError, TelegramNetworkError) as e:
+            print(f"[fatal] {type(e).__name__}: {e} - restarting in 15s")
+            _time.sleep(15)
